@@ -171,6 +171,10 @@ def test_user_can_cancel_own_pending_upload(tmp_path, monkeypatch):
         job = get_library_service()._list_worm_jobs_internal(statuses=["pending", "processing"], limit=1)[0]
     cancel = client.post(f"/library/upload/{job.upload_id}/cancel", follow_redirects=True)
     assert cancel.status_code == 200
+    with app.app_context():
+        upload = get_library_service()._load_upload(job.upload_id)
+        assert upload.status == "cancelled"
+        assert get_library_service().get_worm_job(job.id).status == "cancelled"
     gate.set()
     drain_worm_queue(app)
     with app.app_context():

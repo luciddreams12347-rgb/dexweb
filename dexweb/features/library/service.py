@@ -3,7 +3,7 @@ import threading
 from pathlib import Path
 from types import SimpleNamespace
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from flask import current_app
 
@@ -437,6 +437,55 @@ class LibraryService:
         if not is_admin:
             raise WormJobPermissionError("Worm jobs are only visible to administrators.")
 
+    def _require_worm_job_access(self, job, actor, is_admin=False):
+        from .permissions import user_can_view_worm_job
+
+        if not user_can_view_worm_job(job, actor, is_admin=is_admin):
+            raise WormJobPermissionError("You do not have access to this Worm job.")
+
+    def get_worm_job_for_actor(self, job_id, actor, is_admin=False):
+        job = self.get_worm_job(job_id)
+        if not job:
+            return None
+        self._require_worm_job_access(job, actor, is_admin=is_admin)
+        return job
+
+    def list_worm_jobs_for_actor(self, actor, is_admin=False, statuses=None, limit=50):
+        if is_admin:
+            return self.list_worm_jobs(statuses=statuses, limit=limit, is_admin=True)
+        jobs = self._list_worm_jobs_internal(statuses=statuses, limit=limit)
+        return [job for job in jobs if getattr(job, "uploader", None) == actor]
+
+    def _job_is_cancelled(self, job_id):
+        job = self.get_worm_job(job_id)
+        return bool(job and job.status == "cancelled")
+
+    def _should_stop_job(self, job_id, cancel_check=None):
+        if cancel_check and cancel_check():
+            return True
+        return self._job_is_cancelled(job_id)
+
+    def _parse_job_started_at(self, value):
+        if not value:
+            return None
+        if isinstance(value, datetime):
+            return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        text = str(value).replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+    def _job_is_stale(self, job):
+        if job.status != "processing":
+            return False
+        started = self._parse_job_started_at(getattr(job, "started_at", None))
+        if not started:
+            return True
+        stale_seconds = int(current_app.config.get("WORM_STALE_PROCESSING_SECONDS", 3600))
+        return datetime.now(timezone.utc) - started > timedelta(seconds=stale_seconds)
+
     def create_worm_job(self, upload_id):
         if self._db_enabled():
             with db_connection(autocommit=False) as connection:
@@ -513,9 +562,16 @@ class LibraryService:
             payload["batch_id"] = upload.get("batch_id")
         return _ns(payload)
 
-    def get_worm_job_for_upload(self, upload_id, is_admin=False):
-        jobs = self.list_worm_jobs(upload_id=upload_id, limit=1, is_admin=is_admin)
-        return jobs[0] if jobs else None
+    def get_worm_job_for_upload(self, upload_id, actor=None, is_admin=False):
+        jobs = self._list_worm_jobs_internal(upload_id=upload_id, limit=1)
+        if not jobs:
+            return None
+        job = jobs[0]
+        if actor is not None:
+            self._require_worm_job_access(job, actor, is_admin=is_admin)
+        elif not is_admin:
+            raise WormJobPermissionError("Worm jobs are only visible to administrators.")
+        return job
 
     def _list_worm_jobs_internal(self, statuses=None, upload_id=None, limit=50):
         statuses = statuses or []
@@ -646,14 +702,59 @@ class LibraryService:
         get_worm_worker().enqueue(upload_id, job.id, current_app._get_current_object())
         return job
 
-    def resume_pending_worm_jobs(self, enqueue_fn):
+    def recover_worm_jobs(self, enqueue_fn):
         jobs = self._list_worm_jobs_internal(statuses=["pending", "processing"], limit=500)
         for job in jobs:
-            if job.status == "cancelled":
+            upload = self._load_upload(job.upload_id)
+            if not upload:
+                self.update_worm_job(
+                    job.id,
+                    status="failed",
+                    completed_at=_utcnow_iso(),
+                    error_message="Upload not found during recovery.",
+                )
                 continue
+
+            if upload.status == "cancelled" or job.status == "cancelled":
+                if job.status != "cancelled":
+                    self._finalize_cancel(job.id, job.upload_id, actor=getattr(job, "cancelled_by", None) or "system")
+                elif upload.status != "cancelled":
+                    self._mark_upload_cancelled(job.upload_id)
+                continue
+
+            if upload.status in {"processed", "approved", "published", "rejected", "worm_failed"}:
+                if job.status == "processing":
+                    target = "completed" if upload.status == "processed" else "failed"
+                    self.update_worm_job(
+                        job.id,
+                        status=target,
+                        completed_at=_utcnow_iso(),
+                        error_message=None if target == "completed" else f"Upload status is {upload.status}.",
+                    )
+                continue
+
+            if self._job_is_stale(job):
+                current_app.logger.warning(
+                    "Recovering stale Worm job job_id=%s upload_id=%s started_at=%s",
+                    job.id,
+                    job.upload_id,
+                    job.started_at,
+                )
+                self.update_worm_job(job.id, status="pending", started_at=None, error_message=None)
+                if upload.status == "processing":
+                    self._mark_upload_pending(job.upload_id)
+                enqueue_fn(job.upload_id, job.id)
+                continue
+
             if job.status == "processing":
                 self.update_worm_job(job.id, status="pending", started_at=None)
+                if upload.status == "processing":
+                    self._mark_upload_pending(job.upload_id)
+
             enqueue_fn(job.upload_id, job.id)
+
+    def resume_pending_worm_jobs(self, enqueue_fn):
+        self.recover_worm_jobs(enqueue_fn)
 
     def retry_worm_job(self, upload_id, actor="ADMIN"):
         upload = self._load_upload(upload_id)
@@ -678,17 +779,21 @@ class LibraryService:
             return None
         if job.status in {"completed", "cancelled"}:
             return self.get_review_for_upload(upload_id) if job.status == "completed" else None
-        if cancel_check and cancel_check():
-            self._cancel_worm_job(job_id, upload_id, actor=job.cancelled_by or "system")
+        if self._should_stop_job(job_id, cancel_check):
+            self._finalize_cancel(job_id, upload_id, actor=getattr(job, "cancelled_by", None) or "system")
             return None
         self.update_worm_job(job_id, status="processing", started_at=_utcnow_iso(), error_message=None)
+        self._mark_upload_processing(upload_id)
         upload = self._load_upload(upload_id)
         if not upload:
             self._fail_worm_job(job_id, upload_id, "Upload not found.")
             return None
+        if upload.status == "cancelled" or self._should_stop_job(job_id, cancel_check):
+            self._finalize_cancel(job_id, upload_id, actor=getattr(job, "cancelled_by", None) or upload.uploader)
+            return None
         try:
-            if cancel_check and cancel_check():
-                self._cancel_worm_job(job_id, upload_id, actor=job.cancelled_by or "system")
+            if self._should_stop_job(job_id, cancel_check):
+                self._finalize_cancel(job_id, upload_id, actor=getattr(job, "cancelled_by", None) or upload.uploader)
                 return None
             extracted_text = load_upload_text(upload.stored_path)
             processed = run_worm_pipeline_timed(
@@ -696,14 +801,17 @@ class LibraryService:
                 upload,
                 extracted_text,
                 self._generation_timeout_seconds(),
-                cancel_check=cancel_check,
+                cancel_check=lambda: self._should_stop_job(job_id, cancel_check),
             )
-            if cancel_check and cancel_check():
-                self._cancel_worm_job(job_id, upload_id, actor=job.cancelled_by or "system")
+            if self._should_stop_job(job_id, cancel_check):
+                self._finalize_cancel(job_id, upload_id, actor=getattr(job, "cancelled_by", None) or upload.uploader)
                 return None
             review = self._create_review_from_processed(upload_id, upload, processed)
             if not review:
                 raise RuntimeError("Review item could not be created after Worm processing.")
+            if self._should_stop_job(job_id, cancel_check):
+                self._finalize_cancel(job_id, upload_id, actor=getattr(job, "cancelled_by", None) or upload.uploader)
+                return None
             self.update_worm_job(job_id, status="completed", completed_at=_utcnow_iso(), error_message=None)
             self._mark_upload_processed(upload_id)
             self.record_batch_file_result(getattr(upload, "batch_id", None), success=True, upload_id=upload_id)
@@ -713,9 +821,16 @@ class LibraryService:
             return review
         except OllamaCancelledError:
             current_app.logger.info("Library worm job cancelled upload_id=%s job_id=%s", upload_id, job_id)
-            self._cancel_worm_job(job_id, upload_id, actor=job.cancelled_by or "system")
+            refreshed = self.get_worm_job(job_id)
+            actor = refreshed.cancelled_by if refreshed and refreshed.cancelled_by else upload.uploader
+            self._finalize_cancel(job_id, upload_id, actor=actor)
             return None
         except Exception as error:
+            if self._should_stop_job(job_id, cancel_check):
+                refreshed = self.get_worm_job(job_id)
+                actor = refreshed.cancelled_by if refreshed and refreshed.cancelled_by else upload.uploader
+                self._finalize_cancel(job_id, upload_id, actor=actor)
+                return None
             current_app.logger.exception("Library worm job failed upload_id=%s job_id=%s", upload_id, job_id)
             message = str(error) or "Worm could not process this upload right now."
             self._fail_worm_job(job_id, upload_id, message)
@@ -726,6 +841,7 @@ class LibraryService:
         job = self.get_worm_job(job_id)
         if not job:
             return {"ok": False, "message": "Worm job not found."}
+        self._require_worm_job_access(job, actor, is_admin=is_admin)
         if job.status in {"completed", "failed", "cancelled"}:
             return {"ok": False, "message": f"Worm job is already {job.status}."}
         upload = self._load_upload(job.upload_id)
@@ -733,28 +849,24 @@ class LibraryService:
             return {"ok": False, "message": "Upload not found."}
         if not is_admin and upload.uploader != actor:
             raise WormJobPermissionError("You can only cancel your own pending uploads.")
-        if not is_admin and job.status not in {"pending", "processing"}:
-            return {"ok": False, "message": "This upload can no longer be cancelled."}
+        if upload.status == "cancelled" and job.status == "cancelled":
+            return {"ok": True, "message": "Upload already cancelled."}
 
         from .worm_worker import get_worm_worker
 
         worker = get_worm_worker()
-        self.update_worm_job(
-            job_id,
-            status="cancelled",
-            cancelled_at=_utcnow_iso(),
-            cancelled_by=actor,
-            error_message=None,
-        )
+        self._finalize_cancel(job_id, job.upload_id, actor=actor, record_batch=upload.status != "cancelled")
         worker.request_cancel(job_id)
-        self._mark_upload_cancelled(job.upload_id)
-        self.record_batch_file_result(getattr(upload, "batch_id", None), success=False)
-        if getattr(upload, "batch_id", None):
-            self._maybe_finalize_batch(upload.batch_id)
         log_action(actor, f"Library worm cancelled upload_id={job.upload_id} job_id={job_id}")
         return {"ok": True, "message": f"Worm job #{job_id} cancelled."}
 
-    def _cancel_worm_job(self, job_id, upload_id, actor):
+    def _finalize_cancel(self, job_id, upload_id, actor, record_batch=True):
+        job = self.get_worm_job(job_id)
+        if job and job.status == "cancelled":
+            upload = self._load_upload(upload_id)
+            if upload and upload.status != "cancelled":
+                self._mark_upload_cancelled(upload_id)
+            return
         self.update_worm_job(
             job_id,
             status="cancelled",
@@ -763,11 +875,41 @@ class LibraryService:
             error_message=None,
         )
         self._mark_upload_cancelled(upload_id)
+        if not record_batch:
+            return
         upload = self._load_upload(upload_id)
         batch_id = upload.batch_id if upload else None
         self.record_batch_file_result(batch_id, success=False)
         if batch_id:
             self._maybe_finalize_batch(batch_id)
+
+    def _mark_upload_processing(self, upload_id):
+        if self._db_enabled():
+            with db_cursor() as cursor:
+                cursor.execute(
+                    "UPDATE library_uploads SET status='processing' WHERE id=%s AND status IN ('pending', 'processing')",
+                    (upload_id,),
+                )
+            return
+        store = self._load_store()
+        for item in store["uploads"]:
+            if item["id"] == upload_id and item.get("status") in {"pending", "processing"}:
+                item["status"] = "processing"
+        self._save_store(store)
+
+    def _mark_upload_pending(self, upload_id):
+        if self._db_enabled():
+            with db_cursor() as cursor:
+                cursor.execute(
+                    "UPDATE library_uploads SET status='pending' WHERE id=%s AND status='processing'",
+                    (upload_id,),
+                )
+            return
+        store = self._load_store()
+        for item in store["uploads"]:
+            if item["id"] == upload_id and item.get("status") == "processing":
+                item["status"] = "pending"
+        self._save_store(store)
 
     def _mark_upload_cancelled(self, upload_id):
         if self._db_enabled():

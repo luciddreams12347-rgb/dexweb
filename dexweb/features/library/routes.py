@@ -17,11 +17,23 @@ def _public_upload_status(status):
         return "ready"
     if status == "cancelled":
         return "cancelled"
+    if status == "worm_failed":
+        return "unavailable"
     return "unavailable"
 
 
-def _public_batch(batch):
-    waiting = max(batch.total_files - batch.processed_files - batch.failed_files, 0)
+def _public_batch(batch, uploads=None):
+    upload_rows = uploads or getattr(batch, "uploads", None) or []
+    cancelled_files = sum(1 for upload in upload_rows if upload.get("status") == "cancelled")
+    waiting = max(batch.total_files - batch.processed_files - batch.failed_files - cancelled_files, 0)
+    if waiting > 0:
+        status = "processing"
+    elif batch.failed_files and batch.processed_files:
+        status = "partial"
+    elif batch.failed_files:
+        status = "failed"
+    else:
+        status = "completed"
     return {
         "id": batch.id,
         "title": batch.title,
@@ -29,7 +41,7 @@ def _public_batch(batch):
         "total_files": batch.total_files,
         "processed_files": batch.processed_files,
         "waiting_files": waiting,
-        "status": "processing" if waiting > 0 else "completed",
+        "status": status,
     }
 
 
@@ -48,7 +60,10 @@ def library_home():
     username = session.get("user")
     batches = []
     if username:
-        batches = [_public_batch(batch) for batch in service.list_batches(uploader=username)]
+        for batch in service.list_batches(uploader=username):
+            detail = service.get_batch(batch.id)
+            uploads = detail.uploads if detail else []
+            batches.append(_public_batch(batch, uploads=uploads))
     batch_message = request.args.get("batch_message", "").strip()
     return render_template(
         "library_home.html",
@@ -117,16 +132,12 @@ def library_batch(batch_id):
     for upload in batch.uploads:
         item = dict(upload)
         item["public_status"] = _public_upload_status(upload.get("status", "pending"))
-        item["can_cancel"] = (
-            batch.uploader == username
-            and upload.get("status") in {"pending", "processing"}
-            and not session.get("is_admin")
-        ) or (
-            session.get("is_admin")
-            and upload.get("status") in {"pending", "processing"}
+        owns_batch = batch.uploader == username
+        item["can_cancel"] = upload.get("status") in {"pending", "processing"} and (
+            owns_batch or session.get("is_admin")
         )
         uploads.append(item)
-    public_batch = _public_batch(batch)
+    public_batch = _public_batch(batch, uploads=uploads)
     public_batch["uploads"] = uploads
     return render_template("batch_status.html", batch=public_batch)
 
@@ -143,7 +154,12 @@ def library_cancel_upload(upload_id):
     is_admin = user_is_admin()
     if upload.uploader != username and not is_admin:
         return render_template("message.html", message="You do not have access to this upload."), 403
+    if upload.status == "cancelled":
+        return redirect(f"{request.form.get('next') or url_for('main.library_home')}?batch_message=Upload already cancelled.")
     jobs = service._list_worm_jobs_internal(upload_id=upload_id, statuses=["pending", "processing"], limit=1)
+    if not jobs and upload.status in {"pending", "processing"}:
+        service._mark_upload_cancelled(upload_id)
+        return redirect(f"{request.form.get('next') or url_for('main.library_home')}?batch_message=Upload cancelled.")
     if not jobs:
         return render_template("message.html", message="This upload is no longer processing."), 400
     try:

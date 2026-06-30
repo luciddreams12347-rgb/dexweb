@@ -92,12 +92,22 @@ Important variables:
 - `OLLAMA_CONNECT_TIMEOUT`: seconds to wait while connecting to Ollama (default `10`).
 - `OLLAMA_GENERATION_TIMEOUT`: optional seconds cap for model generation. Leave empty to allow slow local generations.
 - `OLLAMA_MAX_RETRIES`: retry count for transient Ollama connection failures (default `2`).
+- `WORM_STALE_PROCESSING_SECONDS`: after a crash/restart, Worm jobs left in `processing` longer than this are reset to `pending` and re-queued (default `3600`).
 - `LIBRARY_UPLOADS_DIR`: optional writable directory for uploaded library source files.
 - `LIBRARY_MAX_UPLOAD_BYTES`: maximum accepted upload size in bytes for DEX Library uploads.
 
 Library uploads accept PDF, DOCX, TXT, and image files. Users can upload one file, multiple files, or a full folder; multi-file and folder uploads are tracked as upload batches while each file still gets its own Worm review item.
 
-Worm metadata processing runs asynchronously in a background worker. Upload requests return immediately after the file is saved; AI processing continues without blocking Flask/Gunicorn workers. Use `OLLAMA_CONNECT_TIMEOUT` for unreachable Ollama hosts and optionally set `OLLAMA_GENERATION_TIMEOUT` when you want to fail long-running generations. Worm job administration is restricted to admins at `/admin/library/worm`.
+Worm metadata processing runs asynchronously in a background worker. Upload requests return immediately after the file is saved; AI processing continues without blocking Flask/Gunicorn workers. Use `OLLAMA_CONNECT_TIMEOUT` for unreachable Ollama hosts and optionally set `OLLAMA_GENERATION_TIMEOUT` when you want to fail long-running generations.
+
+Worm job states are `pending`, `processing`, `completed`, `failed`, and `cancelled`. Cancelling updates the database immediately, stops review creation, and is checked before and after AI generation. After a restart, stale `processing` jobs are recovered safely using `WORM_STALE_PROCESSING_SECONDS`.
+
+Permissions:
+- Admins can view all Worm jobs at `/admin/library/worm`.
+- Upload owners can cancel their own pending/processing uploads from the batch page.
+- Worm job details are not visible to other users.
+
+The web app starts even if Ollama is offline or the Worm worker fails to initialize. Background recovery runs in a separate thread so Gunicorn can bind to `$PORT` immediately on Render.
 
 ## Database Setup
 
@@ -178,6 +188,8 @@ Possible but less ideal:
 3. Use these settings:
    - Build command: `pip install -r requirements.txt`
    - Start command: `gunicorn --bind 0.0.0.0:$PORT wsgi:app`
+   - Render sets `PORT` automatically; the app must listen on `0.0.0.0`, not `127.0.0.1`.
+   - Ollama can be offline during deploy; the site must still boot.
 4. Add environment variables from `.env.example`.
 5. Connect MySQL using `DATABASE_URL` or the `DEX_DB_*` variables.
 6. Deploy.

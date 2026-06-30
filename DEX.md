@@ -155,5 +155,24 @@ Environment:
 - `OLLAMA_CONNECT_TIMEOUT`: seconds to wait while connecting to Ollama (default `10`).
 - `OLLAMA_GENERATION_TIMEOUT`: optional seconds cap for model generation. Leave empty to allow slow local generations.
 - `OLLAMA_MAX_RETRIES`: retry count for transient Ollama connection failures (default `2`).
+- `WORM_STALE_PROCESSING_SECONDS`: stale `processing` jobs are reset to `pending` after this many seconds on restart (default `3600`).
 
-On app restart, pending Worm jobs are re-queued automatically.
+Worm job states: `pending`, `processing`, `completed`, `failed`, `cancelled`.
+
+Cancellation:
+- Updates the Worm job and upload status immediately.
+- Checked before AI generation, after AI output, and before review creation.
+- Cancelled jobs never create review items.
+
+Recovery:
+- On startup, Worm recovery runs in a background thread so Flask/Gunicorn can bind to `$PORT` immediately.
+- Pending jobs are re-queued.
+- Jobs left in `processing` after a crash are reset when stale.
+- Uploads already `cancelled` keep their jobs cancelled.
+
+Permissions:
+- Admins can inspect all Worm jobs at `/admin/library/worm`.
+- Upload owners can cancel their own pending/processing uploads.
+- Other users cannot view another user's Worm jobs or processing errors.
+
+Ollama being offline does not prevent DexWeb from starting. AI failures only fail the individual Worm job.
