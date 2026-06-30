@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Login - {{ site.brand }}{% endblock %}
+{% block content %}
+<section class="panel narrow center">
+  <h1>Sign In / Create Account</h1>
+  <form method="post" class="stack">
+    <input type="text" name="username" placeholder="Username" required>
+    <input type="password" name="password" placeholder="Password" required>
+    <label>
+      <span>Register grade</span>
+      <select name="grade">
+        <option value="">(only for new users)</option>
+        <option value="9">9</option>
+        <option value="10">10</option>
+        <option value="11">11</option>
+      </select>
+    </label>
+    <p class="hint">If username does not exist, a new account will be created and grade is required.</p>
+    <button type="submit">Continue</button>
+  </form>
+  {% if message %}<p class="error">{{ message }}</p>{% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,8 @@
+{% for m in messages %}
+  <div class="message">
+    <span class="tag" style="background: {{ m.tag_color }};">{{ m.tag_label }}</span>
+    <strong>{{ m.username }}</strong>
+    <span class="timestamp">[{{ m.ts }}]</span>
+    <div class="message-text">{{ m.text }}</div>
+  </div>
+{% endfor %}

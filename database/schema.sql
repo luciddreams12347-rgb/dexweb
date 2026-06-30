@@ -1,0 +1,25 @@
+CREATE TABLE IF NOT EXISTS users (
+  username VARCHAR(80) NOT NULL PRIMARY KEY,
+  password VARCHAR(255) NOT NULL,
+  grade TINYINT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS logs (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(80) NOT NULL,
+  action VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_logs_created_at (created_at),
+  INDEX idx_logs_username (username)
+);
+
+CREATE TABLE IF NOT EXISTS bans (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  username VARCHAR(80) NOT NULL,
+  feature VARCHAR(80) NOT NULL,
+  expires_at DATETIME NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uq_bans_username_feature (username, feature),
+  INDEX idx_bans_expires_at (expires_at)
+);

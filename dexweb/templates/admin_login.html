@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% block title %}Admin Login - {{ site.brand }}{% endblock %}
+{% block content %}
+<section class="panel narrow center">
+  <h1>Admin Login</h1>
+  <form method="post" class="stack">
+    <input type="password" name="password" placeholder="Admin Password" required>
+    <button type="submit">Login</button>
+  </form>
+  {% if message %}<p class="error">{{ message }}</p>{% endif %}
+</section>
+{% endblock %}

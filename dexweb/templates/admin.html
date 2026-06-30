@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Admin - {{ site.brand }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Admin Panel</h1>
+  {% if not db_enabled %}<p class="hint">Database is disabled; admin data is empty in template/demo mode.</p>{% endif %}
+  <h2>All Users</h2>
+  <table>
+    <tr><th>Username</th><th>Grade</th><th>Status</th></tr>
+    {% for u, g in users %}
+      <tr>
+        <td>{{ u }}</td>
+        <td>{{ g }}</td>
+        <td>
+          {% if u in ban_map %}
+            {% for f, e in ban_map[u] %}Banned from {{ f }} until {{ e }}<br>{% endfor %}
+          {% else %}
+            Active
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+  <h2>Moderation</h2>
+  <form method="post" class="admin-grid">
+    <input type="text" name="username" placeholder="Username">
+    <input type="text" name="feature" placeholder="cipher, art, chat:grade10">
+    <input type="number" name="days" min="0" placeholder="Days">
+    <input type="number" name="hours" min="0" placeholder="Hours">
+    <input type="number" name="minutes" min="0" placeholder="Minutes">
+    <select name="action">
+      <option value="ban_user">Ban</option>
+      <option value="unban_user">Unban</option>
+      <option value="remove_user">Remove</option>
+    </select>
+    <button type="submit">Apply</button>
+  </form>
+  <h2>Recent User Logs</h2>
+  <pre class="result">{% for u, a, t in logs %}[{{ t }}] {{ u }} -> {{ a }}
+{% endfor %}</pre>
+  <h2>Site Logs</h2>
+  <pre class="result">{{ site_logs }}</pre>
+  <a class="button ghost" href="{{ url_for('main.home') }}">Back</a>
+</section>
+{% endblock %}

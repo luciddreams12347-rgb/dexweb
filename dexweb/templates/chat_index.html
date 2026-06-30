@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Chat Rooms - {{ site.brand }}{% endblock %}
+{% block content %}
+<section class="panel center">
+  <h1>Chat Rooms</h1>
+  <p class="hint">You can enter general. You can enter your grade room, or any room if you are admin.</p>
+  <div class="button-row">
+    {% for room in site.rooms %}
+      <a class="button" href="{{ url_for('main.chat_room', room=room.key) }}">{{ room.label }}</a>
+    {% endfor %}
+  </div>
+  <a class="button ghost" href="{{ url_for('main.home') }}">Back</a>
+</section>
+{% endblock %}

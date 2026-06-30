@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel center">
+  <p class="error">{{ message }}</p>
+  <a class="button ghost" href="{{ url_for('main.home') }}">Back</a>
+</section>
+{% endblock %}

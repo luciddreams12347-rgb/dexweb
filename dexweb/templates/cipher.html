@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Cypher - {{ site.brand }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Cypher Tool</h1>
+  <form method="post" class="stack">
+    <textarea name="text" rows="5">{{ text }}</textarea>
+    <div class="button-row">
+      <button name="action" value="encode">Encode</button>
+      <button name="action" value="decode">Decode</button>
+    </div>
+  </form>
+  <h2>Result:</h2>
+  <pre class="result">{{ result }}</pre>
+  <a class="button ghost" href="{{ url_for('main.home') }}">Back</a>
+</section>
+{% endblock %}

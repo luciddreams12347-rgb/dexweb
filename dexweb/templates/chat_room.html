@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Chat - {{ room_name }}{% endblock %}
+{% block content %}
+<section class="chat-panel">
+  <h1>Room: {{ room_name }}</h1>
+  <div class="chatbox" id="chatbox">
+    {% include "partials/chat_messages.html" %}
+  </div>
+  {% if allowed %}
+  <form method="post" class="stack chat-form">
+    <textarea name="text" rows="3" placeholder="Type message..." required></textarea>
+    <div class="button-row">
+      <button type="submit">Send</button>
+      <a class="button ghost" href="{{ url_for('main.chat_index') }}">Back</a>
+    </div>
+  </form>
+  {% else %}
+    <p class="error">You are not allowed to enter this room.</p>
+    <a class="button ghost" href="{{ url_for('main.chat_index') }}">Back</a>
+  {% endif %}
+</section>
+<script src="{{ url_for('static', filename='js/chat.js') }}" defer></script>
+{% endblock %}

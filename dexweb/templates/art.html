@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Art Tool - {{ site.brand }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Art Tool</h1>
+  <form method="post" class="stack">
+    <input type="text" name="text" value="{{ text }}" placeholder="Enter text">
+    <button type="submit">Generate Art</button>
+  </form>
+  <h2>Result:</h2>
+  <pre class="result">{{ result }}</pre>
+  <a class="button ghost" href="{{ url_for('main.home') }}">Back</a>
+</section>
+{% endblock %}
