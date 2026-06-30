@@ -1,17 +1,22 @@
+from io import BytesIO
+from unittest.mock import MagicMock, patch
+
+import pytest
+
 from dexweb import create_app
 from dexweb.features.dex.service import get_dex_service
 
 
-def make_app(tmp_path):
-    return create_app(
-        {
-            "TESTING": True,
-            "SECRET_KEY": "test-secret",
-            "ADMIN_PASSWORD": "admin-test",
-            "DB_ENABLED": False,
-            "DEX_SYSTEM_PROMPT_PATH": str(tmp_path / "dex-system-prompt.txt"),
-        }
-    )
+def make_app(tmp_path, **overrides):
+    config = {
+        "TESTING": True,
+        "SECRET_KEY": "test-secret",
+        "ADMIN_PASSWORD": "admin-test",
+        "DB_ENABLED": False,
+        "DEX_SYSTEM_PROMPT_PATH": str(tmp_path / "dex-system-prompt.txt"),
+    }
+    config.update(overrides)
+    return create_app(config)
 
 
 def login_admin(client):
@@ -94,3 +99,51 @@ def test_admin_can_reset_dex_runtime_state_without_restarting(tmp_path):
     assert response.status_code == 200
     assert b"DEX reset complete." in response.data
     assert runtime_state == {}
+
+
+def test_ollama_provider_sends_system_and_user_prompts(tmp_path):
+    app = make_app(
+        tmp_path,
+        DEX_PROVIDER="ollama",
+        DEX_MODEL="qwen2.5:7b",
+        OLLAMA_URL="http://localhost:11434",
+    )
+    captured = {}
+
+    def fake_urlopen(api_request, timeout=120):
+        captured["url"] = api_request.full_url
+        captured["payload"] = api_request.data.decode("utf-8")
+        response = MagicMock()
+        response.read.return_value = b'{"message":{"role":"assistant","content":"Ollama answer"}}'
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+        return response
+
+    with patch("dexweb.features.dex.service.request.urlopen", side_effect=fake_urlopen):
+        with app.app_context():
+            response = get_dex_service().process(
+                prompt="Classify this topic",
+                messages=[{"role": "user", "content": "Earlier note"}],
+                context={"feature": "library-worm"},
+                user="student",
+            )
+
+    payload = __import__("json").loads(captured["payload"])
+    assert captured["url"] == "http://localhost:11434/api/chat"
+    assert payload["model"] == "qwen2.5:7b"
+    assert payload["messages"][0]["role"] == "system"
+    assert "You are DEX, the central intelligence system of DexWeb." in payload["messages"][0]["content"]
+    assert {"role": "user", "content": "Earlier note"} in payload["messages"]
+    assert payload["messages"][-1]["role"] == "user"
+    assert "Classify this topic" in payload["messages"][-1]["content"]
+    assert '"feature": "library-worm"' in payload["messages"][-1]["content"]
+    assert response["ok"] is True
+    assert response["service"] == "DEX"
+    assert response["provider"] == "ollama"
+    assert response["model"] == "qwen2.5:7b"
+    assert response["content"] == "Ollama answer"
+    assert response["request"]["prompt"] == "Classify this topic"
+    assert response["request"]["messages"] == [{"role": "user", "content": "Earlier note"}]
+    assert response["request"]["context"] == {"feature": "library-worm"}
+    assert response["request"]["user"] == "student"
+    assert "metadata" in response

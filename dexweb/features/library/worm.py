@@ -1,4 +1,15 @@
+import json
+import re
+
 from .search import tokenize_topics
+
+
+WORM_METADATA_PROMPT = (
+    "Analyze educational source material for library metadata only. "
+    "Do NOT rewrite, paraphrase, summarize, improve, or correct the source content. "
+    "Return ONLY valid JSON with keys: subject, topic, grade, suggested_sections, confidence. "
+    "Optional keys: difficulty, duplicate_hint."
+)
 
 
 def _detect_grade(text, fallback):
@@ -21,29 +32,92 @@ def _detect_subject(text, fallback):
     return "General"
 
 
+def _parse_ai_metadata(content):
+    if not content:
+        return {}
+    text = content.strip()
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except json.JSONDecodeError:
+        pass
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if not match:
+        return {}
+    try:
+        parsed = json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _coerce_grade(value, fallback):
+    if value in (None, ""):
+        return fallback
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _coerce_confidence(value, fallback=0.72):
+    if value in (None, ""):
+        return fallback
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(0.0, min(1.0, score))
+
+
 def run_worm_pipeline(dex_service, upload, extracted_text):
+    original_text = extracted_text
     ai_result = dex_service.process(
-        prompt=(
-            "Worm pipeline: clean content, deduplicate, detect grade/subject/topic, "
-            "and suggest chapter/section placement."
-        ),
-        messages=[{"role": "user", "content": extracted_text[:2000]}],
-        context={"feature": "library-worm", "upload_id": upload.id, "filename": upload.filename},
+        prompt=WORM_METADATA_PROMPT,
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    "Extract metadata from this source material. "
+                    "Do not rewrite or modify the educational content.\n\n"
+                    f"{original_text[:4000]}"
+                ),
+            }
+        ],
+        context={"feature": "library-worm", "upload_id": upload.id, "filename": upload.filename, "task": "metadata-only"},
         user=upload.uploader,
     )
-    normalized = " ".join(extracted_text.split())
-    topics = tokenize_topics(normalized)[:8]
-    subject = _detect_subject(normalized, upload.subject)
-    grade = _detect_grade(normalized, upload.grade)
-    chapter = upload.title.strip() if upload.title.strip() else (topics[0].title() if topics else "Overview")
+    parsed = _parse_ai_metadata(ai_result.get("content", ""))
+    topics = tokenize_topics(original_text)[:8]
+    subject = (parsed.get("subject") or _detect_subject(original_text, upload.subject) or "General").strip() or "General"
+    grade = _coerce_grade(parsed.get("grade"), _detect_grade(original_text, upload.grade))
+    topic = (parsed.get("topic") or (topics[0] if topics else "")).strip()
+    suggested_sections = parsed.get("suggested_sections") or []
+    if not isinstance(suggested_sections, list):
+        suggested_sections = []
+    suggested_sections = [str(item).strip() for item in suggested_sections if str(item).strip()]
+    chapter = upload.title.strip() if upload.title.strip() else (topic.title() if topic else (topics[0].title() if topics else "Overview"))
+    suggested_section = suggested_sections[0] if suggested_sections else "Core Concepts"
+    confidence = _coerce_confidence(parsed.get("confidence"))
+    ai_suggestions = {
+        "subject": subject,
+        "topic": topic,
+        "grade": grade,
+        "suggested_sections": suggested_sections,
+        "suggested_chapter": chapter,
+        "suggested_section": suggested_section,
+        "confidence": confidence,
+        "difficulty": parsed.get("difficulty"),
+        "duplicate_hint": parsed.get("duplicate_hint"),
+    }
     return {
-        "extracted_text": normalized,
+        "extracted_text": original_text,
         "detected_subject": subject,
         "detected_grade": grade,
         "detected_topics": topics,
         "suggested_chapter": chapter,
-        "suggested_section": "Core Concepts",
-        "confidence": 0.72,
-        "dex_result": ai_result.get("content", ""),
+        "suggested_section": suggested_section,
+        "confidence": confidence,
+        "ai_suggestions": ai_suggestions,
     }
-

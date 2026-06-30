@@ -9,6 +9,19 @@
     <p><strong>Review #{{ item.id }}</strong> ({{ item.status }})</p>
     <p>Source: {{ item.source_file }} | Grade: {{ item.detected_grade or "?" }} | Subject: {{ item.detected_subject }} | Confidence: {{ "%.2f"|format(item.confidence) }}</p>
     <p>Topics: {{ item.detected_topics|join(", ") }}</p>
+    {% if item.ai_suggestions %}
+    <div class="hint" style="margin-bottom: 8px;">
+      <p><strong>AI suggestions (metadata only)</strong></p>
+      <p>Subject: {{ item.ai_suggestions.subject or item.detected_subject }}</p>
+      <p>Grade: {{ item.ai_suggestions.grade if item.ai_suggestions.grade is not none else (item.detected_grade or "?") }}</p>
+      <p>Chapter: {{ item.ai_suggestions.suggested_chapter or item.suggested_chapter }}</p>
+      <p>Section: {{ item.ai_suggestions.suggested_section or item.suggested_section }}</p>
+      {% if item.ai_suggestions.suggested_sections %}
+      <p>Sections: {{ item.ai_suggestions.suggested_sections|join(", ") }}</p>
+      {% endif %}
+      <p>Confidence: {{ "%.2f"|format(item.ai_suggestions.confidence if item.ai_suggestions.confidence is not none else item.confidence) }}</p>
+    </div>
+    {% endif %}
     <form method="post" class="stack">
       <input type="hidden" name="review_id" value="{{ item.id }}">
       <input type="text" name="chapter_title" value="{{ item.suggested_chapter }}" placeholder="Chapter">
@@ -16,7 +29,8 @@
       <input type="text" name="subject" value="{{ item.detected_subject }}" placeholder="Subject">
       <input type="number" name="grade" value="{{ item.detected_grade or '' }}" placeholder="Grade">
       <input type="text" name="topics" value="{{ item.detected_topics|join(', ') }}" placeholder="Topics comma-separated">
-      <textarea name="content" rows="6">{{ item.extracted_text }}</textarea>
+      <label for="content-{{ item.id }}"><strong>Original extracted text (unchanged)</strong></label>
+      <textarea id="content-{{ item.id }}" name="content" rows="6" readonly>{{ item.extracted_text }}</textarea>
       <div class="button-row">
         <button name="action" value="approve">Approve</button>
         <button name="action" value="reject">Reject</button>

@@ -251,3 +251,33 @@ def test_upload_persists_on_disk(tmp_path):
     assert files
     assert files[0].is_file()
 
+
+def test_worm_preserves_original_extracted_text(tmp_path):
+    original = "Grade 10 biology\n\nPhotosynthesis   uses   chlorophyll."
+    app = make_app(tmp_path)
+    client = app.test_client()
+    login_user(client)
+    upload_material(client, payload=original.encode("utf-8"))
+    with app.app_context():
+        review = get_library_service().list_reviews()[0]
+        assert review.extracted_text == original
+        assert review.ai_suggestions
+        assert "rewritten_content" not in review.ai_suggestions
+
+
+def test_published_chapter_uses_original_source_text(tmp_path):
+    original = "Grade 10 biology\n\nPhotosynthesis   uses   chlorophyll."
+    app = make_app(tmp_path)
+    client = app.test_client()
+    login_user(client)
+    upload_material(client, payload=original.encode("utf-8"))
+    login_user(client, username="ADMIN", grade=10, is_admin=True)
+    client.post(
+        "/library/review",
+        data={"review_id": "1", "action": "approve", "chapter_title": "Photosynthesis", "section_title": "Core"},
+        follow_redirects=True,
+    )
+    with app.app_context():
+        view = get_library_service().chapter_view(1)
+    assert view["sections"][0]["content"] == original
+

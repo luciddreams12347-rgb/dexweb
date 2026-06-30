@@ -256,6 +256,7 @@ class LibraryService:
                 "suggested_chapter": processed["suggested_chapter"],
                 "suggested_section": processed["suggested_section"],
                 "confidence": processed["confidence"],
+                "ai_suggestions": processed.get("ai_suggestions", {}),
                 "source_file": upload.filename,
                 "status": "pending",
                 "created_at": "now",
@@ -313,6 +314,14 @@ class LibraryService:
                         "source_file": row[8],
                         "status": row[9],
                         "created_at": row[10],
+                        "ai_suggestions": {
+                            "subject": row[3] or "General",
+                            "grade": row[4],
+                            "suggested_chapter": row[5],
+                            "suggested_section": row[6],
+                            "confidence": float(row[7]),
+                            "topics": topics.get(row[0], []),
+                        },
                     }
                 )
                 for row in rows

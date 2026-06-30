@@ -33,6 +33,7 @@ class DexwebConfig:
     DEX_SYSTEM_PROMPT_PATH = os.environ.get("DEX_SYSTEM_PROMPT_PATH", "")
     DEX_PROVIDER = os.environ.get("DEX_PROVIDER", "local-placeholder")
     DEX_MODEL = os.environ.get("DEX_MODEL", "")
+    OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
     LIBRARY_UPLOADS_DIR = os.environ.get("LIBRARY_UPLOADS_DIR", "")
     LIBRARY_MAX_UPLOAD_BYTES = int(os.environ.get("LIBRARY_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
     SESSION_COOKIE_HTTPONLY = True

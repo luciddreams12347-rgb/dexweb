@@ -86,8 +86,9 @@ Important variables:
 - `DEX_DB_HOST`, `DEX_DB_PORT`, `DEX_DB_USER`, `DEX_DB_PASSWORD`, `DEX_DB_NAME`: MySQL connection parts.
 - `PORT`: hosting providers usually set this automatically.
 - `DEX_SYSTEM_PROMPT_PATH`: optional writable path for the active DEX system prompt.
-- `DEX_PROVIDER`: future AI provider selector; defaults to `local-placeholder`.
-- `DEX_MODEL`: future AI model name.
+- `DEX_PROVIDER`: future AI provider selector; defaults to `local-placeholder`. Set to `ollama` for local Ollama models.
+- `DEX_MODEL`: AI model name. Example for Ollama: `qwen2.5:7b`.
+- `OLLAMA_URL`: Ollama base URL when `DEX_PROVIDER=ollama`. Defaults to `http://localhost:11434`. Ollama runs locally and does not require an external API key.
 - `LIBRARY_UPLOADS_DIR`: optional writable directory for uploaded library source files.
 - `LIBRARY_MAX_UPLOAD_BYTES`: maximum accepted upload size in bytes for DEX Library uploads.
 

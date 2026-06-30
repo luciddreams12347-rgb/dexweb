@@ -1,18 +1,18 @@
 # DEX Central AI Service
 
-DEX is the central intelligence service for DexWeb. It accepts prompts/messages through one reusable service, loads a configurable system prompt, and returns structured responses. The current provider is a local placeholder so no API keys or external secrets are required.
+DEX is the central intelligence service for DexWeb. It accepts prompts/messages through one reusable service, loads a configurable system prompt, and returns structured responses.
 
 ## Files Created
 
 - `dexweb/features/dex/__init__.py`: DEX feature package marker.
 - `dexweb/features/dex/default_system_prompt.txt`: packaged default DEX system prompt.
-- `dexweb/features/dex/service.py`: centralized DEX service, prompt loading/saving/import/export/reset, provider placeholder, structured response contract.
+- `dexweb/features/dex/service.py`: centralized DEX service, prompt loading/saving/import/export/reset, provider selection, structured response contract.
 - `tests/test_dex_service.py`: service and admin integration tests.
 - `DEX.md`: this documentation.
 
 ## Files Modified
 
-- `dexweb/config.py`: added `DEX_SYSTEM_PROMPT_PATH`, `DEX_PROVIDER`, and `DEX_MODEL`.
+- `dexweb/config.py`: added `DEX_SYSTEM_PROMPT_PATH`, `DEX_PROVIDER`, `DEX_MODEL`, and `OLLAMA_URL`.
 - `dexweb/features/admin/routes.py`: added DEX prompt save/import/export/reset handling inside the existing admin system.
 - `dexweb/templates/admin.html`: added DEX controls to the existing admin page.
 - `.env.example`: documented the optional DEX environment variables.
@@ -70,15 +70,45 @@ Admins can:
 - Export/download the active prompt from `/admin/dex/system-prompt.txt`.
 - Reset DEX without restarting Flask.
 
-Reset reloads configuration, reloads the active prompt, and clears temporary runtime state.
+Reset reloads configuration, reloads the active prompt, clears temporary runtime state, and re-selects the configured provider.
 
 ## Environment Variables
 
 - `DEX_SYSTEM_PROMPT_PATH`: optional writable file path for the active prompt.
-- `DEX_PROVIDER`: future provider selection. Current value is `local-placeholder`.
-- `DEX_MODEL`: future model name. Empty is fine for `local-placeholder`.
+- `DEX_PROVIDER`: provider selection. Supported values:
+  - `local-placeholder`: built-in offline placeholder (default).
+  - `ollama`: local Ollama chat API.
+- `DEX_MODEL`: model name for the active provider. Example for Ollama: `qwen2.5:7b`.
+- `OLLAMA_URL`: Ollama base URL when `DEX_PROVIDER=ollama`. Defaults to `http://localhost:11434`.
 
-Do not store AI API keys in code. Add future provider keys as environment variables only.
+Ollama runs locally on your machine. No external API key is required.
+
+## Providers
+
+### local-placeholder
+
+Default provider for development and tests. Returns a fixed structured placeholder response without calling external services.
+
+### ollama
+
+Uses the Ollama chat API at `{OLLAMA_URL}/api/chat`.
+
+Example local setup:
+
+```bash
+DEX_PROVIDER=ollama
+DEX_MODEL=qwen2.5:7b
+OLLAMA_URL=http://localhost:11434
+```
+
+DEX sends:
+
+- the active system prompt
+- prior conversation `messages`
+- the current `prompt`
+- serialized `context` data
+
+The provider returns assistant text in the same DEX response format used by other features.
 
 ## Adding Future AI Providers
 

@@ -1,6 +1,8 @@
+import json
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
+from urllib import error, request
 
 from flask import current_app
 
@@ -26,10 +28,65 @@ class LocalPlaceholderProvider:
         )
 
 
+class OllamaProvider:
+    name = "ollama"
+
+    def __init__(self, app):
+        self.app = app
+
+    def generate(self, dex_request, system_prompt):
+        base_url = self.app.config.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
+        model = self.app.config.get("DEX_MODEL") or "qwen2.5:7b"
+        messages = [{"role": "system", "content": system_prompt}]
+
+        for item in dex_request.messages or []:
+            role = item.get("role")
+            content = item.get("content")
+            if role and content is not None:
+                messages.append({"role": role, "content": content})
+
+        user_content = dex_request.prompt or ""
+        if dex_request.context:
+            context_text = json.dumps(dex_request.context, sort_keys=True)
+            user_content = f"{user_content}\n\nContext:\n{context_text}".strip()
+
+        if user_content:
+            messages.append({"role": "user", "content": user_content})
+
+        payload = json.dumps({"model": model, "messages": messages, "stream": False}).encode("utf-8")
+        api_request = request.Request(
+            f"{base_url}/api/chat",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with request.urlopen(api_request, timeout=120) as response:
+                body = json.loads(response.read().decode("utf-8"))
+        except error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"Ollama request failed ({exc.code}): {detail}") from exc
+        except error.URLError as exc:
+            raise RuntimeError(f"Could not reach Ollama at {base_url}: {exc.reason}") from exc
+
+        message = body.get("message") or {}
+        content = message.get("content")
+        if content is None:
+            raise RuntimeError("Ollama response did not include message content.")
+        return content
+
+
+def _create_provider(app):
+    provider_name = app.config.get("DEX_PROVIDER", "local-placeholder")
+    if provider_name == "ollama":
+        return OllamaProvider(app)
+    return LocalPlaceholderProvider()
+
+
 class DexService:
     def __init__(self, app):
         self.app = app
-        self.provider = LocalPlaceholderProvider()
+        self.provider = _create_provider(app)
         self.runtime_state = {}
         self._system_prompt = None
 
@@ -55,6 +112,7 @@ class DexService:
 
     def reset(self):
         self.runtime_state.clear()
+        self.provider = _create_provider(self.app)
         self.reload()
 
     def reload(self):
