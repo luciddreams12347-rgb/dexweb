@@ -3,7 +3,30 @@
 {% block content %}
 <section class="panel">
   <h1>Admin Panel</h1>
+  {% if admin_message %}<p class="hint">{{ admin_message }}</p>{% endif %}
   {% if not db_enabled %}<p class="hint">Database is disabled; admin data is empty in template/demo mode.</p>{% endif %}
+  <h2>DEX Controls</h2>
+  <p class="hint">Provider: {{ dex_provider }} | Model: {{ dex_model }}</p>
+  <form method="post" class="stack">
+    <input type="hidden" name="action" value="dex_save_prompt">
+    <label>
+      <span>DEX system prompt</span>
+      <textarea name="dex_system_prompt" rows="12">{{ dex_system_prompt }}</textarea>
+    </label>
+    <button type="submit">Save DEX Prompt</button>
+  </form>
+  <form method="post" enctype="multipart/form-data" class="stack">
+    <input type="hidden" name="action" value="dex_import_prompt">
+    <input type="file" name="dex_prompt_file" accept=".txt,text/plain">
+    <button type="submit">Import Prompt File</button>
+  </form>
+  <div class="button-row">
+    <a class="button" href="{{ url_for('main.export_dex_system_prompt') }}">Export Prompt</a>
+    <form method="post">
+      <input type="hidden" name="action" value="dex_reset">
+      <button type="submit">Reset DEX</button>
+    </form>
+  </div>
   <h2>All Users</h2>
   <table>
     <tr><th>Username</th><th>Grade</th><th>Status</th></tr>

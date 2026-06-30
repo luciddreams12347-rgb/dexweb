@@ -133,7 +133,8 @@ button:hover,
 }
 
 .result,
-.chatbox {
+.chatbox,
+.dex-chatbox {
   background: var(--panel);
   border: 1px solid var(--border);
   color: var(--text);
@@ -142,9 +143,50 @@ button:hover,
   white-space: pre-wrap;
 }
 
-.chatbox {
+.chatbox,
+.dex-chatbox {
   height: 400px;
   margin-bottom: 12px;
+}
+
+.dex-header {
+  margin-bottom: 16px;
+}
+
+.dex-header h1 {
+  margin: 0 0 4px;
+}
+
+.dex-empty {
+  margin: 0;
+}
+
+.dex-message {
+  border: 1px solid var(--border);
+  margin-bottom: 12px;
+  padding: 10px 12px;
+}
+
+.dex-message-user {
+  background: rgba(255, 49, 49, 0.08);
+  border-color: rgba(255, 49, 49, 0.35);
+}
+
+.dex-message-assistant {
+  background: rgba(0, 255, 204, 0.06);
+  border-color: rgba(0, 255, 204, 0.25);
+}
+
+.dex-role {
+  color: var(--muted);
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+
+.dex-content {
+  white-space: pre-wrap;
 }
 
 .message {

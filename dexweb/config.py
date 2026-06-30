@@ -30,6 +30,9 @@ class DexwebConfig:
     DB_ENABLED = _bool_env("DEX_DB_ENABLED", bool(_db_url))
     SITE_LOG_PATH = os.environ.get("DEX_SITE_LOG_PATH", "")
     MAX_MESSAGES_PER_ROOM = int(os.environ.get("DEX_MAX_MESSAGES_PER_ROOM", "200"))
+    DEX_SYSTEM_PROMPT_PATH = os.environ.get("DEX_SYSTEM_PROMPT_PATH", "")
+    DEX_PROVIDER = os.environ.get("DEX_PROVIDER", "local-placeholder")
+    DEX_MODEL = os.environ.get("DEX_MODEL", "")
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = "Lax"
     SITE_CONFIG = SITE_CONFIG

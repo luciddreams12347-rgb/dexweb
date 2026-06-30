@@ -4,6 +4,8 @@ DeX Web is a Flask website with a terminal-style design, login/account creation,
 
 The app is organized as a normal Python package so it can grow into a larger platform. New features should live under `dexweb/features/<feature_name>/` with their own routes, services, templates, tests, and database changes.
 
+DEX is now available as the central AI service under `dexweb/features/dex/`. See `DEX.md` for admin controls, prompt management, and future provider integration.
+
 ## Project Structure
 
 ```text
@@ -16,6 +18,7 @@ dexweb/
 │   │   ├── auth/
 │   │   ├── chat/
 │   │   ├── core/
+│   │   ├── dex/
 │   │   └── tools/
 │   ├── static/             # CSS and JavaScript
 │   ├── templates/          # Jinja templates
@@ -79,6 +82,9 @@ Important variables:
 - `DEX_DB_ENABLED`: set `true` when using separate database variables.
 - `DEX_DB_HOST`, `DEX_DB_PORT`, `DEX_DB_USER`, `DEX_DB_PASSWORD`, `DEX_DB_NAME`: MySQL connection parts.
 - `PORT`: hosting providers usually set this automatically.
+- `DEX_SYSTEM_PROMPT_PATH`: optional writable path for the active DEX system prompt.
+- `DEX_PROVIDER`: future AI provider selector; defaults to `local-placeholder`.
+- `DEX_MODEL`: future AI model name.
 
 ## Database Setup
 
@@ -214,6 +220,8 @@ Use this pattern:
 8. Add tests under `tests/`.
 
 Keep secrets in environment variables only. Do not hard-code passwords, database hosts, API keys, or admin credentials.
+
+For future AI-powered features, call `get_dex_service().process(...)` from `dexweb.features.dex.service` instead of creating a separate AI integration. DEX centralizes system prompt handling, provider selection, runtime reset behavior, and structured responses.
 
 ## Troubleshooting
 
