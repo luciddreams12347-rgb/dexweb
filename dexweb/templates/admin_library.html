@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Admin Library - {{ site.brand }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Admin Library Controls</h1>
+  {% if message %}<p class="hint">{{ message }}</p>{% endif %}
+  <form method="post">
+    <button name="action" value="run_suggestions">Run Worm Suggestions</button>
+  </form>
+  <h2>Suggestions</h2>
+  {% if suggestions %}
+    <ul>
+      {% for suggestion in suggestions %}
+        <li>{{ suggestion.text }}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="hint">No suggestions yet.</p>
+  {% endif %}
+  <h2>Version History (Admin Only)</h2>
+  <form method="get" class="admin-grid">
+    <input type="number" name="chapter_id" placeholder="Chapter ID" value="{{ selected_chapter_id or '' }}">
+    <button type="submit">Load Versions</button>
+  </form>
+  {% if versions %}
+    <table>
+      <tr><th>Version</th><th>Actor</th><th>Created</th><th>Restore</th></tr>
+      {% for version in versions %}
+        <tr>
+          <td>{{ version.version }}</td>
+          <td>{{ version.actor }}</td>
+          <td>{{ version.created_at }}</td>
+          <td>
+            <form method="post">
+              <input type="hidden" name="action" value="restore_version">
+              <input type="hidden" name="chapter_id" value="{{ selected_chapter_id }}">
+              <input type="hidden" name="version" value="{{ version.version }}">
+              <button type="submit">Restore</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+  {% if selected_chapter_id %}
+    <h2>Compare Versions</h2>
+    <form method="get" class="admin-grid">
+      <input type="hidden" name="chapter_id" value="{{ selected_chapter_id }}">
+      <input type="number" name="left_version" placeholder="Left version">
+      <input type="number" name="right_version" placeholder="Right version">
+      <button type="submit">Compare</button>
+    </form>
+    {% if comparison %}
+      <pre class="result">{{ comparison.summary }}</pre>
+    {% endif %}
+  {% endif %}
+  <h2>Source Attribution</h2>
+  <form method="get" class="admin-grid">
+    <input type="number" name="section_id" placeholder="Section ID" value="{{ selected_section_id or '' }}">
+    <button type="submit">Load Sources</button>
+  </form>
+  {% if sources %}
+    <table>
+      <tr><th>Upload</th><th>Filename</th><th>Uploader</th><th>Uploaded</th><th>Location</th></tr>
+      {% for source in sources %}
+        <tr>
+          <td>{{ source.upload_id }}</td>
+          <td>{{ source.filename }}</td>
+          <td>{{ source.uploader }}</td>
+          <td>{{ source.uploaded_at }}</td>
+          <td>{{ source.location }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% endif %}
+  <a class="button ghost" href="{{ url_for('main.admin') }}">Back</a>
+</section>
+{% endblock %}

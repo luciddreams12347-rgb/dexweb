@@ -6,6 +6,8 @@ The app is organized as a normal Python package so it can grow into a larger pla
 
 DEX is now available as the central AI service under `dexweb/features/dex/`. See `DEX.md` for admin controls, prompt management, and future provider integration.
 
+DEX Library V1 is available under `dexweb/features/library/` and adds upload->Worm->admin-review->published textbook flow using the existing centralized DEX service.
+
 ## Project Structure
 
 ```text
@@ -19,6 +21,7 @@ dexweb/
 │   │   ├── chat/
 │   │   ├── core/
 │   │   ├── dex/
+│   │   ├── library/
 │   │   └── tools/
 │   ├── static/             # CSS and JavaScript
 │   ├── templates/          # Jinja templates
@@ -85,6 +88,8 @@ Important variables:
 - `DEX_SYSTEM_PROMPT_PATH`: optional writable path for the active DEX system prompt.
 - `DEX_PROVIDER`: future AI provider selector; defaults to `local-placeholder`.
 - `DEX_MODEL`: future AI model name.
+- `LIBRARY_UPLOADS_DIR`: optional writable directory for uploaded library source files.
+- `LIBRARY_MAX_UPLOAD_BYTES`: maximum accepted upload size in bytes for DEX Library uploads.
 
 ## Database Setup
 
@@ -205,6 +210,8 @@ docker run --env-file .env -p 5000:5000 dexweb
 7. Check the live site and admin login.
 
 If database tables change, add a new SQL file in `database/` and run it on the production database before or during deployment.
+
+DEX Library V1 adds `database/library_v1.sql` for normalized upload, review queue, books/chapters/sections, versions, sources, and suggestions tables, plus `database/library_v1_1.sql` for production upload metadata and indexes.
 
 ## Add Future Features Safely
 

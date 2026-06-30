@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Library Review - {{ site.brand }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>Library Review Queue</h1>
+  {% if message %}<p class="hint">{{ message }}</p>{% endif %}
+  {% for item in items %}
+  <article class="result" style="margin-bottom: 12px;">
+    <p><strong>Review #{{ item.id }}</strong> ({{ item.status }})</p>
+    <p>Source: {{ item.source_file }} | Grade: {{ item.detected_grade or "?" }} | Subject: {{ item.detected_subject }} | Confidence: {{ "%.2f"|format(item.confidence) }}</p>
+    <p>Topics: {{ item.detected_topics|join(", ") }}</p>
+    <form method="post" class="stack">
+      <input type="hidden" name="review_id" value="{{ item.id }}">
+      <input type="text" name="chapter_title" value="{{ item.suggested_chapter }}" placeholder="Chapter">
+      <input type="text" name="section_title" value="{{ item.suggested_section }}" placeholder="Section">
+      <input type="text" name="subject" value="{{ item.detected_subject }}" placeholder="Subject">
+      <input type="number" name="grade" value="{{ item.detected_grade or '' }}" placeholder="Grade">
+      <input type="text" name="topics" value="{{ item.detected_topics|join(', ') }}" placeholder="Topics comma-separated">
+      <textarea name="content" rows="6">{{ item.extracted_text }}</textarea>
+      <div class="button-row">
+        <button name="action" value="approve">Approve</button>
+        <button name="action" value="reject">Reject</button>
+        <button name="action" value="reprocess">Reprocess</button>
+        <button name="action" value="publish">Publish</button>
+        <button name="action" value="unpublish">Unpublish</button>
+      </div>
+    </form>
+  </article>
+  {% else %}
+    <p class="hint">No review items.</p>
+  {% endfor %}
+  <a class="button ghost" href="{{ url_for('main.admin') }}">Back</a>
+</section>
+{% endblock %}

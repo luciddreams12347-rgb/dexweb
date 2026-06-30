@@ -16,6 +16,7 @@ SITE_CONFIG = {
     "admin_tag": {"label": "ADMIN", "color": "#e74c3c"},
     "navigation": [
         {"endpoint": "main.dex", "label": "DEX"},
+        {"endpoint": "main.library_home", "label": "Library"},
         {"endpoint": "main.cipher", "label": "Cypher Tool"},
         {"endpoint": "main.art", "label": "Art Tool"},
         {"endpoint": "main.chat_index", "label": "Chat Rooms"},

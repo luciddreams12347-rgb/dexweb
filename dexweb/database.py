@@ -6,7 +6,7 @@ from flask import current_app
 
 
 @contextmanager
-def db_cursor():
+def db_connection(autocommit=True):
     if not current_app.config.get("DB_ENABLED"):
         yield None
         return
@@ -16,14 +16,25 @@ def db_cursor():
         user=current_app.config["DB_USER"],
         password=current_app.config["DB_PASSWORD"],
         database=current_app.config["DB_NAME"],
-        autocommit=True,
+        autocommit=autocommit,
     )
-    cursor = connection.cursor()
     try:
-        yield cursor
+        yield connection
     finally:
-        cursor.close()
         connection.close()
+
+
+@contextmanager
+def db_cursor():
+    with db_connection(autocommit=True) as connection:
+        if connection is None:
+            yield None
+            return
+        cursor = connection.cursor()
+        try:
+            yield cursor
+        finally:
+            cursor.close()
 
 
 def log_action(username, action):

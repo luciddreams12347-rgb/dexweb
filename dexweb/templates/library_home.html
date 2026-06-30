@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Library - {{ site.brand }}{% endblock %}
+{% block content %}
+<section class="panel">
+  <h1>DEX Library</h1>
+  <div class="button-row">
+    <a class="button" href="{{ url_for('main.library_upload') }}">Upload Material</a>
+    <a class="button" href="{{ url_for('main.library_search') }}">Search</a>
+    {% if session.get("is_admin") %}
+      <a class="button" href="{{ url_for('main.library_review_queue') }}">Review Queue</a>
+      <a class="button" href="{{ url_for('main.admin_library') }}">Admin Library</a>
+    {% endif %}
+  </div>
+  {% if chapters %}
+    <h2>Published Chapters</h2>
+    <div class="stack">
+      {% for chapter in chapters %}
+      <article class="message">
+        <strong>Grade {{ chapter.grade or "?" }} - {{ chapter.subject }} - {{ chapter.title }}</strong><br>
+        {% if viewer_grade and chapter.grade and chapter.grade > viewer_grade %}
+          <span class="hint">This material is above your selected grade level.</span><br>
+        {% endif %}
+        <a class="button" href="{{ url_for('main.library_chapter', chapter_id=chapter.id) }}">Open Chapter</a>
+      </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="hint">No published chapters yet.</p>
+  {% endif %}
+  <a class="button ghost" href="{{ url_for('main.home') }}">Back</a>
+</section>
+{% endblock %}

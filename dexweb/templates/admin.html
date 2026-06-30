@@ -5,6 +5,10 @@
   <h1>Admin Panel</h1>
   {% if admin_message %}<p class="hint">{{ admin_message }}</p>{% endif %}
   {% if not db_enabled %}<p class="hint">Database is disabled; admin data is empty in template/demo mode.</p>{% endif %}
+  <div class="button-row">
+    <a class="button" href="{{ url_for('main.library_review_queue') }}">Library Review Queue</a>
+    <a class="button" href="{{ url_for('main.admin_library') }}">Library Admin</a>
+  </div>
   <h2>DEX Controls</h2>
   <p class="hint">Provider: {{ dex_provider }} | Model: {{ dex_model }}</p>
   <form method="post" class="stack">
