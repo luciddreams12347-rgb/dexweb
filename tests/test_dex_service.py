@@ -1,5 +1,5 @@
 from io import BytesIO
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -108,18 +108,10 @@ def test_ollama_provider_sends_system_and_user_prompts(tmp_path):
         DEX_MODEL="qwen2.5:7b",
         OLLAMA_URL="http://localhost:11434",
     )
-    captured = {}
+    def fake_generate(base_url, model, messages, **kwargs):
+        return "Ollama answer"
 
-    def fake_urlopen(api_request, timeout=120):
-        captured["url"] = api_request.full_url
-        captured["payload"] = api_request.data.decode("utf-8")
-        response = MagicMock()
-        response.read.return_value = b'{"message":{"role":"assistant","content":"Ollama answer"}}'
-        response.__enter__.return_value = response
-        response.__exit__.return_value = False
-        return response
-
-    with patch("dexweb.features.dex.service.request.urlopen", side_effect=fake_urlopen):
+    with patch("dexweb.features.dex.service.generate_chat", side_effect=fake_generate) as mocked:
         with app.app_context():
             response = get_dex_service().process(
                 prompt="Classify this topic",
@@ -128,15 +120,15 @@ def test_ollama_provider_sends_system_and_user_prompts(tmp_path):
                 user="student",
             )
 
-    payload = __import__("json").loads(captured["payload"])
-    assert captured["url"] == "http://localhost:11434/api/chat"
-    assert payload["model"] == "qwen2.5:7b"
-    assert payload["messages"][0]["role"] == "system"
-    assert "You are DEX, the central intelligence system of DexWeb." in payload["messages"][0]["content"]
-    assert {"role": "user", "content": "Earlier note"} in payload["messages"]
-    assert payload["messages"][-1]["role"] == "user"
-    assert "Classify this topic" in payload["messages"][-1]["content"]
-    assert '"feature": "library-worm"' in payload["messages"][-1]["content"]
+    messages = mocked.call_args.args[2]
+    assert mocked.call_args.args[0] == "http://localhost:11434"
+    assert mocked.call_args.args[1] == "qwen2.5:7b"
+    assert messages[0]["role"] == "system"
+    assert "You are DEX, the central intelligence system of DexWeb." in messages[0]["content"]
+    assert {"role": "user", "content": "Earlier note"} in messages
+    assert messages[-1]["role"] == "user"
+    assert "Classify this topic" in messages[-1]["content"]
+    assert '"feature": "library-worm"' in messages[-1]["content"]
     assert response["ok"] is True
     assert response["service"] == "DEX"
     assert response["provider"] == "ollama"

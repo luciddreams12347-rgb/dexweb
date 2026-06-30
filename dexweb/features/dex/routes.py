@@ -1,4 +1,4 @@
-from flask import redirect, render_template, request, session, url_for
+from flask import current_app, redirect, render_template, request, session, url_for
 
 from ...database import is_banned, log_action
 from ...routes import main
@@ -28,17 +28,22 @@ def dex():
             error = "Enter a message to send to DEX."
         else:
             history = get_conversation(session)
-            response = get_dex_service().process(
-                prompt=prompt,
-                messages=list(history),
-                context={"feature": "dex-chat"},
-                user=username,
-            )
-            if response.get("ok"):
-                record_exchange(session, prompt, response["content"])
-                log_action(username, "Sent message to DEX")
-                return redirect(url_for("main.dex"))
-            error = "DEX could not process your message. Try again."
+            try:
+                response = get_dex_service().process(
+                    prompt=prompt,
+                    messages=list(history),
+                    context={"feature": "dex-chat"},
+                    user=username,
+                )
+            except Exception:
+                current_app.logger.exception("DEX chat failed for user=%s", username)
+                error = "DEX could not process your message. Try again."
+            else:
+                if response.get("ok"):
+                    record_exchange(session, prompt, response["content"])
+                    log_action(username, "Sent message to DEX")
+                    return redirect(url_for("main.dex"))
+                error = response.get("error") or "DEX could not process your message. Try again."
 
     return render_template(
         "dex.html",

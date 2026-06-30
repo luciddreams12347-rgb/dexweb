@@ -4,6 +4,8 @@ import re
 
 from flask import current_app
 
+from dexweb.features.dex.ollama_client import OllamaCancelledError
+
 from .search import tokenize_topics
 
 
@@ -74,14 +76,26 @@ def _coerce_confidence(value, fallback=0.72):
     return max(0.0, min(1.0, score))
 
 
-def run_worm_pipeline_timed(dex_service, upload, extracted_text, timeout):
+def _cancelled(cancel_check):
+    return bool(cancel_check and cancel_check())
+
+
+def run_worm_pipeline_timed(dex_service, upload, extracted_text, timeout, cancel_check=None):
     from flask import current_app
+
+    if _cancelled(cancel_check):
+        raise OllamaCancelledError("Worm job cancelled before AI processing.")
 
     app = current_app._get_current_object()
 
     def run_in_context():
         with app.app_context():
-            return run_worm_pipeline(dex_service, upload, extracted_text)
+            if _cancelled(cancel_check):
+                raise OllamaCancelledError("Worm job cancelled before AI processing.")
+            return run_worm_pipeline(dex_service, upload, extracted_text, cancel_check=cancel_check)
+
+    if timeout is None:
+        return run_in_context()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
         future = executor.submit(run_in_context)
@@ -91,7 +105,10 @@ def run_worm_pipeline_timed(dex_service, upload, extracted_text, timeout):
             raise TimeoutError(f"Worm AI processing exceeded {timeout}s timeout") from exc
 
 
-def run_worm_pipeline(dex_service, upload, extracted_text):
+def run_worm_pipeline(dex_service, upload, extracted_text, cancel_check=None):
+    if _cancelled(cancel_check):
+        raise OllamaCancelledError("Worm job cancelled before AI processing.")
+
     original_text = extracted_text
     ai_result = dex_service.process(
         prompt=WORM_METADATA_PROMPT,
@@ -107,7 +124,14 @@ def run_worm_pipeline(dex_service, upload, extracted_text):
         ],
         context={"feature": "library-worm", "upload_id": upload.id, "filename": upload.filename, "task": "metadata-only"},
         user=upload.uploader,
+        cancel_check=cancel_check,
     )
+    if _cancelled(cancel_check):
+        raise OllamaCancelledError("Worm job cancelled after AI processing.")
+
+    if not ai_result.get("ok"):
+        raise RuntimeError(ai_result.get("error") or "Worm AI processing failed.")
+
     parsed = _parse_ai_metadata(ai_result.get("content", ""))
     topics = tokenize_topics(original_text)[:8]
     subject = (parsed.get("subject") or _detect_subject(original_text, upload.subject) or "General").strip() or "General"

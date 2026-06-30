@@ -1,4 +1,4 @@
-from flask import redirect, render_template, request, session, url_for
+from flask import current_app, redirect, render_template, request, session, url_for
 
 from ...database import is_banned
 from ...routes import main
@@ -6,8 +6,31 @@ from ..auth.session import login_required
 from .batches import collect_upload_files
 from .permissions import user_is_admin
 from .review import normalize_admin_action
-from .service import get_library_service
+from .service import WormJobPermissionError, get_library_service
 from .uploads import save_upload
+
+
+def _public_upload_status(status):
+    if status in {"pending", "processing"}:
+        return "processing"
+    if status in {"processed", "approved", "published", "rejected", "reprocessed"}:
+        return "ready"
+    if status == "cancelled":
+        return "cancelled"
+    return "unavailable"
+
+
+def _public_batch(batch):
+    waiting = max(batch.total_files - batch.processed_files - batch.failed_files, 0)
+    return {
+        "id": batch.id,
+        "title": batch.title,
+        "source_type": batch.source_type,
+        "total_files": batch.total_files,
+        "processed_files": batch.processed_files,
+        "waiting_files": waiting,
+        "status": "processing" if waiting > 0 else "completed",
+    }
 
 
 @main.route("/library")
@@ -23,7 +46,9 @@ def library_home():
         chapters = [row for row in chapters if row.get("subject", "").lower() == subject.lower()]
     viewer_grade = session.get("grade")
     username = session.get("user")
-    batches = service.list_batches(uploader=username) if username else []
+    batches = []
+    if username:
+        batches = [_public_batch(batch) for batch in service.list_batches(uploader=username)]
     batch_message = request.args.get("batch_message", "").strip()
     return render_template(
         "library_home.html",
@@ -59,13 +84,13 @@ def library_upload():
             )
             if result["batch"]:
                 batch = result["batch"]
-                summary = f"{batch.title}: {batch.total_files} uploaded. Worm processing in background."
+                summary = f"{batch.title}: {batch.total_files} uploaded. Processing continues in the background."
                 return redirect(url_for("main.library_home", batch_message=summary))
             if result["jobs"]:
                 return redirect(
                     url_for(
                         "main.library_home",
-                        batch_message="Upload accepted. Worm is processing in the background.",
+                        batch_message="Upload accepted. Processing continues in the background.",
                     )
                 )
         except ValueError as error:
@@ -87,7 +112,48 @@ def library_batch(batch_id):
     username = session.get("user")
     if batch.uploader != username and not session.get("is_admin"):
         return render_template("message.html", message="You do not have access to this batch."), 403
-    return render_template("batch_status.html", batch=batch)
+
+    uploads = []
+    for upload in batch.uploads:
+        item = dict(upload)
+        item["public_status"] = _public_upload_status(upload.get("status", "pending"))
+        item["can_cancel"] = (
+            batch.uploader == username
+            and upload.get("status") in {"pending", "processing"}
+            and not session.get("is_admin")
+        ) or (
+            session.get("is_admin")
+            and upload.get("status") in {"pending", "processing"}
+        )
+        uploads.append(item)
+    public_batch = _public_batch(batch)
+    public_batch["uploads"] = uploads
+    return render_template("batch_status.html", batch=public_batch)
+
+
+@main.route("/library/upload/<int:upload_id>/cancel", methods=["POST"])
+def library_cancel_upload(upload_id):
+    if not login_required():
+        return redirect(url_for("main.login"))
+    service = get_library_service()
+    upload = service._load_upload(upload_id)
+    if not upload:
+        return render_template("message.html", message="Upload not found."), 404
+    username = session.get("user")
+    is_admin = user_is_admin()
+    if upload.uploader != username and not is_admin:
+        return render_template("message.html", message="You do not have access to this upload."), 403
+    jobs = service._list_worm_jobs_internal(upload_id=upload_id, statuses=["pending", "processing"], limit=1)
+    if not jobs:
+        return render_template("message.html", message="This upload is no longer processing."), 400
+    try:
+        result = service.cancel_worm_job(jobs[0].id, actor=username, is_admin=is_admin)
+    except WormJobPermissionError:
+        return render_template("message.html", message="You do not have permission to cancel this upload."), 403
+    redirect_target = request.form.get("next") or url_for("main.library_home")
+    if result.get("ok"):
+        return redirect(f"{redirect_target}?batch_message={result['message']}")
+    return render_template("message.html", message=result.get("message", "Could not cancel upload.")), 400
 
 
 @main.route("/library/review", methods=["GET", "POST"])
@@ -98,42 +164,60 @@ def library_review_queue():
     message = ""
     if request.method == "POST":
         action = request.form.get("action", "")
-        upload_raw = request.form.get("upload_id", "0") or "0"
-        upload_id = int(upload_raw) if upload_raw.isdigit() else 0
-        if action == "retry_worm" and upload_id:
-            result = service.retry_worm_job(upload_id, actor=session.get("user", "ADMIN"))
+        review_raw = request.form.get("review_id", "0") or "0"
+        review_id = int(review_raw) if review_raw.isdigit() else 0
+        action = normalize_admin_action(action)
+        if review_id and action:
+            result = service.apply_review_action(
+                review_id=review_id,
+                action=action,
+                actor=session.get("user", "ADMIN"),
+                edits={
+                    "chapter_id": request.form.get("chapter_id", ""),
+                    "chapter_title": request.form.get("chapter_title", ""),
+                    "section_title": request.form.get("section_title", ""),
+                    "subject": request.form.get("subject", ""),
+                    "grade": request.form.get("grade", ""),
+                    "topics": request.form.get("topics", ""),
+                    "content": request.form.get("content", ""),
+                },
+            )
             if result:
                 message = result["message"]
         else:
-            review_raw = request.form.get("review_id", "0") or "0"
-            review_id = int(review_raw) if review_raw.isdigit() else 0
-            action = normalize_admin_action(action)
-            if review_id and action:
-                result = service.apply_review_action(
-                    review_id=review_id,
-                    action=action,
-                    actor=session.get("user", "ADMIN"),
-                    edits={
-                        "chapter_id": request.form.get("chapter_id", ""),
-                        "chapter_title": request.form.get("chapter_title", ""),
-                        "section_title": request.form.get("section_title", ""),
-                        "subject": request.form.get("subject", ""),
-                        "grade": request.form.get("grade", ""),
-                        "topics": request.form.get("topics", ""),
-                        "content": request.form.get("content", ""),
-                    },
-                )
-                if result:
-                    message = result["message"]
-            else:
-                message = "Choose a valid review action."
-    worm_jobs = service.list_worm_jobs(statuses=["pending", "processing", "failed"])
+            message = "Choose a valid review action."
     return render_template(
         "review_queue.html",
         items=service.list_reviews(),
-        worm_jobs=worm_jobs,
         message=message,
     )
+
+
+@main.route("/admin/library/worm", methods=["GET", "POST"])
+def admin_worm_jobs():
+    if not user_is_admin():
+        return redirect(url_for("main.admin_login"))
+    service = get_library_service()
+    message = ""
+    if request.method == "POST":
+        action = request.form.get("action", "")
+        upload_raw = request.form.get("upload_id", "0") or "0"
+        upload_id = int(upload_raw) if upload_raw.isdigit() else 0
+        job_raw = request.form.get("job_id", "0") or "0"
+        job_id = int(job_raw) if job_raw.isdigit() else 0
+        actor = session.get("user", "ADMIN")
+        if action == "retry_worm" and upload_id:
+            result = service.retry_worm_job(upload_id, actor=actor)
+            message = result["message"]
+        elif action == "cancel_worm" and job_id:
+            result = service.cancel_worm_job(job_id, actor=actor, is_admin=True)
+            message = result["message"]
+    worm_jobs = service.list_worm_jobs(
+        statuses=["pending", "processing", "failed", "cancelled", "completed"],
+        limit=100,
+        is_admin=True,
+    )
+    return render_template("admin_worm_jobs.html", worm_jobs=worm_jobs, message=message)
 
 
 @main.route("/library/chapter/<int:chapter_id>")

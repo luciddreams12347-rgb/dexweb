@@ -11,6 +11,16 @@ def _bool_env(name, default=False):
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _optional_int_env(name):
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    return int(value)
+
+
 def _database_url():
     value = os.environ.get("DATABASE_URL", "").strip()
     return urlparse(value) if value else None
@@ -34,7 +44,9 @@ class DexwebConfig:
     DEX_PROVIDER = os.environ.get("DEX_PROVIDER", "local-placeholder")
     DEX_MODEL = os.environ.get("DEX_MODEL", "")
     OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://localhost:11434")
-    WORM_AI_TIMEOUT = int(os.environ.get("WORM_AI_TIMEOUT", "120"))
+    OLLAMA_CONNECT_TIMEOUT = int(os.environ.get("OLLAMA_CONNECT_TIMEOUT", "10"))
+    OLLAMA_GENERATION_TIMEOUT = _optional_int_env("OLLAMA_GENERATION_TIMEOUT")
+    OLLAMA_MAX_RETRIES = int(os.environ.get("OLLAMA_MAX_RETRIES", "2"))
     LIBRARY_UPLOADS_DIR = os.environ.get("LIBRARY_UPLOADS_DIR", "")
     LIBRARY_MAX_UPLOAD_BYTES = int(os.environ.get("LIBRARY_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
     SESSION_COOKIE_HTTPONLY = True

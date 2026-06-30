@@ -2,9 +2,17 @@ import json
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
-from urllib import error, request
 
 from flask import current_app
+
+from .ollama_client import (
+    OllamaCancelledError,
+    OllamaConnectionError,
+    OllamaError,
+    OllamaResponseError,
+    OllamaTimeoutError,
+    generate_chat,
+)
 
 
 DEFAULT_PROMPT_RESOURCE = "default_system_prompt.txt"
@@ -21,7 +29,7 @@ class DexRequest:
 class LocalPlaceholderProvider:
     name = "local-placeholder"
 
-    def generate(self, request, system_prompt):
+    def generate(self, request, system_prompt, cancel_check=None):
         return (
             "DEX received the request and returned a structured response. "
             "No external AI provider is configured yet."
@@ -34,9 +42,12 @@ class OllamaProvider:
     def __init__(self, app):
         self.app = app
 
-    def generate(self, dex_request, system_prompt):
+    def generate(self, dex_request, system_prompt, cancel_check=None):
         base_url = self.app.config.get("OLLAMA_URL", "http://localhost:11434").rstrip("/")
         model = self.app.config.get("DEX_MODEL") or "qwen2.5:7b"
+        connect_timeout = int(self.app.config.get("OLLAMA_CONNECT_TIMEOUT", 10))
+        generation_timeout = self.app.config.get("OLLAMA_GENERATION_TIMEOUT")
+        max_retries = int(self.app.config.get("OLLAMA_MAX_RETRIES", 2))
         messages = [{"role": "system", "content": system_prompt}]
 
         for item in dex_request.messages or []:
@@ -53,27 +64,28 @@ class OllamaProvider:
         if user_content:
             messages.append({"role": "user", "content": user_content})
 
-        payload = json.dumps({"model": model, "messages": messages, "stream": False}).encode("utf-8")
-        api_request = request.Request(
-            f"{base_url}/api/chat",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
+        logger = current_app.logger if current_app else None
         try:
-            with request.urlopen(api_request, timeout=120) as response:
-                body = json.loads(response.read().decode("utf-8"))
-        except error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Ollama request failed ({exc.code}): {detail}") from exc
-        except error.URLError as exc:
-            raise RuntimeError(f"Could not reach Ollama at {base_url}: {exc.reason}") from exc
-
-        message = body.get("message") or {}
-        content = message.get("content")
-        if content is None:
-            raise RuntimeError("Ollama response did not include message content.")
-        return content
+            return generate_chat(
+                base_url,
+                model,
+                messages,
+                connect_timeout=connect_timeout,
+                generation_timeout=generation_timeout,
+                max_retries=max_retries,
+                cancel_check=cancel_check,
+                logger_obj=logger,
+            )
+        except OllamaCancelledError:
+            raise
+        except OllamaTimeoutError as exc:
+            raise RuntimeError(str(exc)) from exc
+        except OllamaConnectionError as exc:
+            raise RuntimeError(str(exc)) from exc
+        except OllamaResponseError as exc:
+            raise RuntimeError(str(exc)) from exc
+        except OllamaError as exc:
+            raise RuntimeError(f"Ollama request failed: {exc}") from exc
 
 
 def _create_provider(app):
@@ -122,10 +134,26 @@ class DexService:
         else:
             self._system_prompt = self._default_system_prompt()
 
-    def process(self, prompt=None, messages=None, context=None, user=None):
+    def process(self, prompt=None, messages=None, context=None, user=None, cancel_check=None):
         request = DexRequest(prompt=prompt or "", messages=messages or [], context=context or {}, user=user)
         system_prompt = self.get_system_prompt()
-        content = self.provider.generate(request, system_prompt)
+        try:
+            content = self.provider.generate(request, system_prompt, cancel_check=cancel_check)
+        except Exception as exc:
+            current_app.logger.exception("DEX provider failed for user=%s context=%s", user, context)
+            return {
+                "ok": False,
+                "service": "DEX",
+                "provider": self.provider.name,
+                "model": current_app.config.get("DEX_MODEL", "none"),
+                "error": str(exc) or "DEX could not process the request.",
+                "request": {
+                    "prompt": request.prompt,
+                    "messages": request.messages,
+                    "context": request.context,
+                    "user": request.user,
+                },
+            }
         return {
             "ok": True,
             "service": "DEX",

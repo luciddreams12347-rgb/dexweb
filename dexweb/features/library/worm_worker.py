@@ -9,6 +9,8 @@ class WormWorker:
         self._queue = Queue()
         self._thread = None
         self._default_app = None
+        self._cancel_events = {}
+        self._lock = threading.Lock()
 
     def init_app(self, app):
         self._default_app = app
@@ -29,6 +31,29 @@ class WormWorker:
                 lambda upload_id, job_id: self.enqueue(upload_id, job_id, app)
             )
 
+    def register_job(self, job_id):
+        with self._lock:
+            event = threading.Event()
+            self._cancel_events[job_id] = event
+            return event
+
+    def request_cancel(self, job_id):
+        with self._lock:
+            event = self._cancel_events.get(job_id)
+            if event is not None:
+                event.set()
+                return True
+            return False
+
+    def clear_job(self, job_id):
+        with self._lock:
+            self._cancel_events.pop(job_id, None)
+
+    def is_cancelled(self, job_id):
+        with self._lock:
+            event = self._cancel_events.get(job_id)
+            return bool(event and event.is_set())
+
     def enqueue(self, upload_id, job_id, app=None):
         self._queue.put((app or self._default_app, upload_id, job_id))
 
@@ -41,17 +66,24 @@ class WormWorker:
             if app is None:
                 self._queue.task_done()
                 continue
+            cancel_event = self.register_job(job_id)
             with app.app_context():
                 try:
                     from .service import get_library_service
 
-                    get_library_service().execute_worm_job(upload_id, job_id)
+                    get_library_service().execute_worm_job(
+                        upload_id,
+                        job_id,
+                        cancel_check=cancel_event.is_set,
+                    )
                 except Exception:
                     app.logger.exception(
                         "Unhandled worm worker failure upload_id=%s job_id=%s",
                         upload_id,
                         job_id,
                     )
+                finally:
+                    self.clear_job(job_id)
             self._queue.task_done()
 
     def drain(self, timeout=10):
@@ -73,3 +105,8 @@ def get_worm_worker():
     if _worker is None:
         _worker = WormWorker()
     return _worker
+
+
+def reset_worm_worker():
+    global _worker
+    _worker = None

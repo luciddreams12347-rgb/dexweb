@@ -12,6 +12,7 @@
     <a class="button" href="{{ url_for('main.library_search') }}">Search</a>
     {% if session.get("is_admin") %}
       <a class="button" href="{{ url_for('main.library_review_queue') }}">Review Queue</a>
+      <a class="button" href="{{ url_for('main.admin_worm_jobs') }}">Worm Jobs</a>
       <a class="button" href="{{ url_for('main.admin_library') }}">Admin Library</a>
     {% endif %}
   </nav>
@@ -23,10 +24,8 @@
         <p><strong>{{ batch.title }}</strong> <span class="hint">({{ batch.status }})</span></p>
         <p class="hint">
           {{ batch.total_files }} uploaded,
-          {{ batch.processed_files }} processed
-          {% set waiting = batch.total_files - batch.processed_files - batch.failed_files %}
-          {% if waiting > 0 %}, {{ waiting }} waiting{% endif %}
-          {% if batch.failed_files %}, {{ batch.failed_files }} failed{% endif %}
+          {{ batch.processed_files }} ready
+          {% if batch.waiting_files > 0 %}, {{ batch.waiting_files }} processing{% endif %}
         </p>
         <a class="button ghost" href="{{ url_for('main.library_batch', batch_id=batch.id) }}">View Batch</a>
       </article>

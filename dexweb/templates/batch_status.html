@@ -8,10 +8,8 @@
   </header>
   <article class="card">
     <p><strong>{{ batch.total_files }}</strong> uploaded</p>
-    <p><strong>{{ batch.processed_files }}</strong> processed</p>
-    {% set waiting = batch.total_files - batch.processed_files - batch.failed_files %}
-    {% if waiting > 0 %}<p><strong>{{ waiting }}</strong> waiting</p>{% endif %}
-    {% if batch.failed_files %}<p class="error"><strong>{{ batch.failed_files }}</strong> failed</p>{% endif %}
+    <p><strong>{{ batch.processed_files }}</strong> ready</p>
+    {% if batch.waiting_files > 0 %}<p><strong>{{ batch.waiting_files }}</strong> still processing</p>{% endif %}
   </article>
   {% if batch.uploads %}
   <h2>Files</h2>
@@ -20,7 +18,13 @@
     <article class="card card-compact">
       <strong>{{ upload.original_filename or upload.filename }}</strong>
       {% if upload.folder_path %}<p class="hint">{{ upload.folder_path }}</p>{% endif %}
-      <p class="hint">Status: {{ upload.status }}</p>
+      <p class="hint">Status: {{ upload.public_status }}</p>
+      {% if upload.can_cancel %}
+      <form method="post" action="{{ url_for('main.library_cancel_upload', upload_id=upload.id) }}">
+        <input type="hidden" name="next" value="{{ url_for('main.library_batch', batch_id=batch.id) }}">
+        <button type="submit">Cancel Processing</button>
+      </form>
+      {% endif %}
     </article>
     {% endfor %}
   </div>

@@ -152,6 +152,8 @@ Worm AI is limited to metadata such as grade, subject, topics, structure suggest
 
 Environment:
 
-- `WORM_AI_TIMEOUT`: seconds before a background Worm AI call is marked failed (default `120`).
+- `OLLAMA_CONNECT_TIMEOUT`: seconds to wait while connecting to Ollama (default `10`).
+- `OLLAMA_GENERATION_TIMEOUT`: optional seconds cap for model generation. Leave empty to allow slow local generations.
+- `OLLAMA_MAX_RETRIES`: retry count for transient Ollama connection failures (default `2`).
 
 On app restart, pending Worm jobs are re-queued automatically.

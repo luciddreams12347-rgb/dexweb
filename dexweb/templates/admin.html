@@ -9,6 +9,7 @@
   {% if not db_enabled %}<p class="hint">Database is disabled; admin data is empty in template/demo mode.</p>{% endif %}
   <div class="button-row">
     <a class="button" href="{{ url_for('main.library_review_queue') }}">Library Review Queue</a>
+    <a class="button" href="{{ url_for('main.admin_worm_jobs') }}">Worm Jobs</a>
     <a class="button" href="{{ url_for('main.admin_library') }}">Library Admin</a>
   </div>
   <h2>DEX Controls</h2>

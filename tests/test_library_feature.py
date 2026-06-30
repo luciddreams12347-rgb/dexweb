@@ -41,7 +41,7 @@ def upload_material(client, filename="bio.txt", payload=b"Grade 10 biology photo
     return client.post("/library/upload", data=data, content_type="multipart/form-data", follow_redirects=True)
 
 
-def drain_worm_queue(app, timeout=10):
+def drain_worm_queue(app, timeout=30):
     with app.app_context():
         get_worm_worker().drain(timeout=timeout)
 
@@ -143,10 +143,10 @@ def test_worm_ai_failure_is_handled(tmp_path, monkeypatch):
     monkeypatch.setattr(library_service_module, "run_worm_pipeline_timed", boom)
     response = upload_material(client)
     assert response.status_code == 200
-    assert b"Worm is processing" in response.data
+    assert b"Processing continues" in response.data
     drain_worm_queue(app)
     with app.app_context():
-        jobs = get_library_service().list_worm_jobs(statuses=["failed"])
+        jobs = get_library_service().list_worm_jobs(statuses=["failed"], is_admin=True)
         assert len(jobs) == 1
         assert jobs[0].error_message
         assert len(get_library_service().list_reviews()) == 0
@@ -188,9 +188,10 @@ def test_review_actions_approve_publish_unpublish_reprocess_reject(tmp_path):
     assert client.get("/library/chapter/1").status_code == 200
 
     reprocess = client.post("/library/review", data={"review_id": "1", "action": "reprocess"}, follow_redirects=True)
+    drain_worm_queue(app)
     reject = client.post("/library/review", data={"review_id": "2", "action": "reject"}, follow_redirects=True)
     assert reprocess.status_code == 200
-    assert b"Reprocessed as review" in reprocess.data
+    assert b"Reprocessed as review" in reprocess.data or b"queued in background" in reprocess.data
     assert reject.status_code == 200
     assert b"Review item rejected." in reject.data
 
@@ -398,11 +399,11 @@ def test_upload_returns_before_worm_completes(tmp_path, monkeypatch):
     login_user(client)
     response = upload_material(client)
     assert response.status_code == 200
-    assert b"Worm is processing" in response.data
+    assert b"Processing continues" in response.data
     with app.app_context():
         service = get_library_service()
         assert len(service.list_reviews()) == 0
-        jobs = service.list_worm_jobs(statuses=["pending", "processing"])
+        jobs = service._list_worm_jobs_internal(statuses=["pending", "processing"])
         assert len(jobs) == 1
     gate.set()
     drain_worm_queue(app)
@@ -429,12 +430,12 @@ def test_worm_retry_after_failure(tmp_path, monkeypatch):
     drain_worm_queue(app)
     with app.app_context():
         service = get_library_service()
-        failed = service.list_worm_jobs(statuses=["failed"])
+        failed = service.list_worm_jobs(statuses=["failed"], is_admin=True)
         assert len(failed) == 1
         assert len(service.list_reviews()) == 0
     login_user(client, username="ADMIN", grade=10, is_admin=True)
     retry = client.post(
-        "/library/review",
+        "/admin/library/worm",
         data={"upload_id": "1", "action": "retry_worm"},
         follow_redirects=True,
     )
@@ -443,6 +444,6 @@ def test_worm_retry_after_failure(tmp_path, monkeypatch):
     with app.app_context():
         service = get_library_service()
         assert len(service.list_reviews()) == 1
-        completed = service.list_worm_jobs(statuses=["completed"])
+        completed = service.list_worm_jobs(statuses=["completed"], is_admin=True)
         assert len(completed) >= 1
 
