@@ -13,4 +13,7 @@ def create_app(test_config=None):
     app.config["SITE"] = app.config["SITE_CONFIG"]
     register_routes()
     app.register_blueprint(main)
+    from .features.library.worm_worker import get_worm_worker
+
+    get_worm_worker().init_app(app)
     return app

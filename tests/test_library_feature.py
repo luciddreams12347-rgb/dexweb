@@ -1,10 +1,12 @@
 from io import BytesIO
+import threading
 
 import pytest
 
 from dexweb import create_app
 from dexweb.features.library import service as library_service_module
 from dexweb.features.library.service import get_library_service
+from dexweb.features.library.worm_worker import get_worm_worker
 
 
 def make_app(tmp_path, **overrides):
@@ -37,6 +39,11 @@ def upload_material(client, filename="bio.txt", payload=b"Grade 10 biology photo
         "description": fields.get("description", "core notes"),
     }
     return client.post("/library/upload", data=data, content_type="multipart/form-data", follow_redirects=True)
+
+
+def drain_worm_queue(app, timeout=10):
+    with app.app_context():
+        get_worm_worker().drain(timeout=timeout)
 
 
 def upload_multiple_material(client, files, **fields):
@@ -75,6 +82,7 @@ def test_upload_creates_review_item_and_persists(tmp_path):
     response = upload_material(client)
     assert response.status_code == 200
     assert b"DEX Library" in response.data
+    drain_worm_queue(app)
     with app.app_context():
         items = get_library_service().list_reviews()
         assert len(items) == 1
@@ -132,10 +140,16 @@ def test_worm_ai_failure_is_handled(tmp_path, monkeypatch):
     def boom(*args, **kwargs):
         raise RuntimeError("ai down")
 
-    monkeypatch.setattr(library_service_module, "run_worm_pipeline", boom)
+    monkeypatch.setattr(library_service_module, "run_worm_pipeline_timed", boom)
     response = upload_material(client)
     assert response.status_code == 200
-    assert b"Worm could not process this upload right now." in response.data
+    assert b"Worm is processing" in response.data
+    drain_worm_queue(app)
+    with app.app_context():
+        jobs = get_library_service().list_worm_jobs(statuses=["failed"])
+        assert len(jobs) == 1
+        assert jobs[0].error_message
+        assert len(get_library_service().list_reviews()) == 0
 
 
 def test_review_actions_approve_publish_unpublish_reprocess_reject(tmp_path):
@@ -143,6 +157,7 @@ def test_review_actions_approve_publish_unpublish_reprocess_reject(tmp_path):
     client = app.test_client()
     login_user(client)
     upload_material(client, payload=b"Grade 11 physics vectors and motion", subject="Physics", grade="11", title="Vectors")
+    drain_worm_queue(app)
     login_user(client, username="ADMIN", grade=11, is_admin=True)
 
     approve = client.post(
@@ -185,6 +200,7 @@ def test_search_filters_keyword_grade_subject_topic(tmp_path):
     client = app.test_client()
     login_user(client)
     upload_material(client, payload=b"Grade 10 biology photosynthesis chlorophyll sunlight", subject="Biology", grade="10", title="Photosynthesis")
+    drain_worm_queue(app)
     login_user(client, username="ADMIN", grade=10, is_admin=True)
     client.post("/library/review", data={"review_id": "1", "action": "approve", "chapter_title": "Photosynthesis", "section_title": "Core"}, follow_redirects=True)
 
@@ -206,6 +222,7 @@ def test_version_history_and_restore(tmp_path):
     client = app.test_client()
     login_user(client)
     upload_material(client, payload=b"Grade 10 biology first copy", title="Cells")
+    drain_worm_queue(app)
     login_user(client, username="ADMIN", grade=10, is_admin=True)
     client.post("/library/review", data={"review_id": "1", "action": "approve", "chapter_title": "Cells", "section_title": "Original"}, follow_redirects=True)
     client.post("/library/review", data={"review_id": "1", "action": "publish", "chapter_id": "1", "chapter_title": "Cells", "section_title": "Updated", "content": "new copy"}, follow_redirects=True)
@@ -228,6 +245,7 @@ def test_source_attribution_is_admin_only(tmp_path):
     client = app.test_client()
     login_user(client)
     upload_material(client, payload=b"Grade 10 biology source attribution sample")
+    drain_worm_queue(app)
     login_user(client, username="ADMIN", grade=10, is_admin=True)
     client.post("/library/review", data={"review_id": "1", "action": "approve", "chapter_title": "Sources", "section_title": "Trace"}, follow_redirects=True)
 
@@ -280,6 +298,7 @@ def test_worm_preserves_original_extracted_text(tmp_path):
     client = app.test_client()
     login_user(client)
     upload_material(client, payload=original.encode("utf-8"))
+    drain_worm_queue(app)
     with app.app_context():
         review = get_library_service().list_reviews()[0]
         assert review.extracted_text == original
@@ -293,6 +312,7 @@ def test_published_chapter_uses_original_source_text(tmp_path):
     client = app.test_client()
     login_user(client)
     upload_material(client, payload=original.encode("utf-8"))
+    drain_worm_queue(app)
     login_user(client, username="ADMIN", grade=10, is_admin=True)
     client.post(
         "/library/review",
@@ -318,6 +338,7 @@ def test_multiple_uploads_create_batch_and_reviews(tmp_path):
     )
     assert response.status_code == 200
     assert b"Grade 10 Biology Notes" in response.data
+    drain_worm_queue(app)
     with app.app_context():
         service = get_library_service()
         batches = service.list_batches()
@@ -333,6 +354,7 @@ def test_single_upload_does_not_create_batch(tmp_path):
     client = app.test_client()
     login_user(client)
     upload_material(client)
+    drain_worm_queue(app)
     with app.app_context():
         service = get_library_service()
         assert len(service.list_batches()) == 0
@@ -351,6 +373,7 @@ def test_folder_upload_preserves_paths_and_batch(tmp_path):
         ],
     )
     assert response.status_code == 200
+    drain_worm_queue(app)
     with app.app_context():
         service = get_library_service()
         batches = service.list_batches()
@@ -359,4 +382,67 @@ def test_folder_upload_preserves_paths_and_batch(tmp_path):
         batch = service.get_batch(batches[0].id)
         paths = {item["folder_path"] for item in batch.uploads}
         assert "Biology Notes" in paths
+
+
+def test_upload_returns_before_worm_completes(tmp_path, monkeypatch):
+    gate = threading.Event()
+    original = library_service_module.run_worm_pipeline_timed
+
+    def blocked(*args, **kwargs):
+        gate.wait(timeout=5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(library_service_module, "run_worm_pipeline_timed", blocked)
+    app = make_app(tmp_path)
+    client = app.test_client()
+    login_user(client)
+    response = upload_material(client)
+    assert response.status_code == 200
+    assert b"Worm is processing" in response.data
+    with app.app_context():
+        service = get_library_service()
+        assert len(service.list_reviews()) == 0
+        jobs = service.list_worm_jobs(statuses=["pending", "processing"])
+        assert len(jobs) == 1
+    gate.set()
+    drain_worm_queue(app)
+    with app.app_context():
+        assert len(get_library_service().list_reviews()) == 1
+
+
+def test_worm_retry_after_failure(tmp_path, monkeypatch):
+    app = make_app(tmp_path)
+    client = app.test_client()
+    login_user(client)
+
+    calls = {"count": 0}
+    original = library_service_module.run_worm_pipeline_timed
+
+    def flaky(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("ai down")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(library_service_module, "run_worm_pipeline_timed", flaky)
+    upload_material(client)
+    drain_worm_queue(app)
+    with app.app_context():
+        service = get_library_service()
+        failed = service.list_worm_jobs(statuses=["failed"])
+        assert len(failed) == 1
+        assert len(service.list_reviews()) == 0
+    login_user(client, username="ADMIN", grade=10, is_admin=True)
+    retry = client.post(
+        "/library/review",
+        data={"upload_id": "1", "action": "retry_worm"},
+        follow_redirects=True,
+    )
+    assert retry.status_code == 200
+    drain_worm_queue(app)
+    with app.app_context():
+        service = get_library_service()
+        assert len(service.list_reviews()) == 1
+        completed = service.list_worm_jobs(statuses=["completed"])
+        assert len(completed) >= 1
 

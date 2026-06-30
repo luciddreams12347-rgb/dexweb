@@ -1,11 +1,39 @@
 {% extends "base.html" %}
 {% block title %}Library Review - {{ site.brand }}{% endblock %}
 {% block content %}
-<section class="panel">
-  <h1>Library Review Queue</h1>
-  {% if message %}<p class="hint">{{ message }}</p>{% endif %}
+<section class="panel page-panel">
+  <header class="page-header">
+    <h1>Library Review Queue</h1>
+    <p class="hint">Review completed Worm output or retry failed background jobs.</p>
+  </header>
+  {% if message %}<p class="hint status-banner">{{ message }}</p>{% endif %}
+
+  {% if worm_jobs %}
+  <h2>Worm Processing</h2>
+  <div class="stack">
+    {% for job in worm_jobs %}
+    <article class="card card-compact">
+      <p><strong>Upload #{{ job.upload_id }}</strong> - {{ job.source_file }} <span class="hint">({{ job.status }})</span></p>
+      {% if job.started_at %}<p class="hint">Started: {{ job.started_at }}</p>{% endif %}
+      {% if job.completed_at %}<p class="hint">Completed: {{ job.completed_at }}</p>{% endif %}
+      {% if job.error_message %}<p class="error">Failure: {{ job.error_message }}</p>{% endif %}
+      {% if job.status in ["pending", "processing"] %}
+      <p class="hint">Worm is processing this upload in the background.</p>
+      {% endif %}
+      {% if job.status == "failed" %}
+      <form method="post" class="button-row">
+        <input type="hidden" name="upload_id" value="{{ job.upload_id }}">
+        <button type="submit" name="action" value="retry_worm">Retry Worm</button>
+      </form>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <h2>Ready For Review</h2>
   {% for item in items %}
-  <article class="result" style="margin-bottom: 12px;">
+  <article class="card">
     <p><strong>Review #{{ item.id }}</strong> ({{ item.status }})</p>
     <p>Source: {{ item.source_file }} | Grade: {{ item.detected_grade or "?" }} | Subject: {{ item.detected_subject }} | Confidence: {{ "%.2f"|format(item.confidence) }}</p>
     <p>Topics: {{ item.detected_topics|join(", ") }}</p>
@@ -41,8 +69,10 @@
     </form>
   </article>
   {% else %}
-    <p class="hint">No review items.</p>
+    <p class="hint">No review items ready yet.</p>
   {% endfor %}
-  <a class="button ghost" href="{{ url_for('main.admin') }}">Back</a>
+  <nav class="page-nav">
+    <a class="button ghost" href="{{ url_for('main.admin') }}">Back</a>
+  </nav>
 </section>
 {% endblock %}

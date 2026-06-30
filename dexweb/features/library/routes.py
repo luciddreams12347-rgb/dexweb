@@ -59,18 +59,15 @@ def library_upload():
             )
             if result["batch"]:
                 batch = result["batch"]
-                waiting = max(batch.total_files - batch.processed_files - batch.failed_files, 0)
-                summary = (
-                    f"{batch.title}: {batch.total_files} uploaded, "
-                    f"{batch.processed_files} processed"
-                    + (f", {waiting} waiting" if waiting else "")
-                    + (f", {batch.failed_files} failed" if batch.failed_files else "")
-                )
+                summary = f"{batch.title}: {batch.total_files} uploaded. Worm processing in background."
                 return redirect(url_for("main.library_home", batch_message=summary))
-            if result["errors"]:
-                message = result["errors"][0]
-            else:
-                return redirect(url_for("main.library_home"))
+            if result["jobs"]:
+                return redirect(
+                    url_for(
+                        "main.library_home",
+                        batch_message="Upload accepted. Worm is processing in the background.",
+                    )
+                )
         except ValueError as error:
             message = str(error)
         except Exception:
@@ -100,29 +97,43 @@ def library_review_queue():
     service = get_library_service()
     message = ""
     if request.method == "POST":
-        review_raw = request.form.get("review_id", "0") or "0"
-        review_id = int(review_raw) if review_raw.isdigit() else 0
-        action = normalize_admin_action(request.form.get("action", ""))
-        if review_id and action:
-            result = service.apply_review_action(
-                review_id=review_id,
-                action=action,
-                actor=session.get("user", "ADMIN"),
-                edits={
-                    "chapter_id": request.form.get("chapter_id", ""),
-                    "chapter_title": request.form.get("chapter_title", ""),
-                    "section_title": request.form.get("section_title", ""),
-                    "subject": request.form.get("subject", ""),
-                    "grade": request.form.get("grade", ""),
-                    "topics": request.form.get("topics", ""),
-                    "content": request.form.get("content", ""),
-                },
-            )
+        action = request.form.get("action", "")
+        upload_raw = request.form.get("upload_id", "0") or "0"
+        upload_id = int(upload_raw) if upload_raw.isdigit() else 0
+        if action == "retry_worm" and upload_id:
+            result = service.retry_worm_job(upload_id, actor=session.get("user", "ADMIN"))
             if result:
                 message = result["message"]
         else:
-            message = "Choose a valid review action."
-    return render_template("review_queue.html", items=service.list_reviews(), message=message)
+            review_raw = request.form.get("review_id", "0") or "0"
+            review_id = int(review_raw) if review_raw.isdigit() else 0
+            action = normalize_admin_action(action)
+            if review_id and action:
+                result = service.apply_review_action(
+                    review_id=review_id,
+                    action=action,
+                    actor=session.get("user", "ADMIN"),
+                    edits={
+                        "chapter_id": request.form.get("chapter_id", ""),
+                        "chapter_title": request.form.get("chapter_title", ""),
+                        "section_title": request.form.get("section_title", ""),
+                        "subject": request.form.get("subject", ""),
+                        "grade": request.form.get("grade", ""),
+                        "topics": request.form.get("topics", ""),
+                        "content": request.form.get("content", ""),
+                    },
+                )
+                if result:
+                    message = result["message"]
+            else:
+                message = "Choose a valid review action."
+    worm_jobs = service.list_worm_jobs(statuses=["pending", "processing", "failed"])
+    return render_template(
+        "review_queue.html",
+        items=service.list_reviews(),
+        worm_jobs=worm_jobs,
+        message=message,
+    )
 
 
 @main.route("/library/chapter/<int:chapter_id>")

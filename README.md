@@ -91,8 +91,11 @@ Important variables:
 - `OLLAMA_URL`: Ollama base URL when `DEX_PROVIDER=ollama`. Defaults to `http://localhost:11434`. Ollama runs locally and does not require an external API key.
 - `LIBRARY_UPLOADS_DIR`: optional writable directory for uploaded library source files.
 - `LIBRARY_MAX_UPLOAD_BYTES`: maximum accepted upload size in bytes for DEX Library uploads.
+- `WORM_AI_TIMEOUT`: maximum seconds for background Worm AI metadata calls before marking a job failed (default `120`).
 
 Library uploads accept PDF, DOCX, TXT, and image files. Users can upload one file, multiple files, or a full folder; multi-file and folder uploads are tracked as upload batches while each file still gets its own Worm review item.
+
+Worm metadata processing runs asynchronously in a background worker. Upload requests return immediately after the file is saved; AI processing continues without blocking Flask/Gunicorn workers. Configure `WORM_AI_TIMEOUT` (seconds, default `120`) to fail long-running AI calls gracefully.
 
 ## Database Setup
 
@@ -214,7 +217,7 @@ docker run --env-file .env -p 5000:5000 dexweb
 
 If database tables change, add a new SQL file in `database/` and run it on the production database before or during deployment.
 
-DEX Library V1 adds `database/library_v1.sql` for normalized upload, review queue, books/chapters/sections, versions, sources, and suggestions tables, plus `database/library_v1_1.sql` for production upload metadata and indexes, and `database/library_v1_2.sql` for upload batch tracking.
+DEX Library V1 adds `database/library_v1.sql` for normalized upload, review queue, books/chapters/sections, versions, sources, and suggestions tables, plus `database/library_v1_1.sql` for production upload metadata and indexes, `database/library_v1_2.sql` for upload batch tracking, and `database/library_v1_3.sql` for background Worm job tracking.
 
 ## Add Future Features Safely
 

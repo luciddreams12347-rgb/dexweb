@@ -136,3 +136,22 @@ DEX is intended to support future features such as:
 - Administrative AI tools
 
 Those features should call `get_dex_service().process(...)` instead of creating separate AI clients.
+
+## DEX Library Worm Integration
+
+DEX Library uses `get_dex_service().process(...)` for Worm metadata extraction only. Worm does not rewrite or modify uploaded educational source text.
+
+Upload flow:
+
+1. Save file and metadata.
+2. Create a pending Worm job.
+3. Return upload success to the user immediately.
+4. Process Worm in a background worker thread.
+
+Worm AI is limited to metadata such as grade, subject, topics, structure suggestions, and confidence scoring. When Worm completes, a review queue item is created for admin approval.
+
+Environment:
+
+- `WORM_AI_TIMEOUT`: seconds before a background Worm AI call is marked failed (default `120`).
+
+On app restart, pending Worm jobs are re-queued automatically.

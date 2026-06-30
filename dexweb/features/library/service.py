@@ -1,13 +1,22 @@
 import json
+import threading
 from pathlib import Path
 from types import SimpleNamespace
+
+from datetime import datetime, timezone
 
 from flask import current_app
 
 from ...database import db_connection, db_cursor, log_action
 from ..dex.service import get_dex_service
 from .uploads import load_upload_text
-from .worm import run_worm_pipeline
+from .worm import run_worm_pipeline_timed
+
+_store_lock = threading.Lock()
+
+
+def _utcnow_iso():
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _ns(data):
@@ -32,9 +41,20 @@ class LibraryService:
 
     def _empty_store(self):
         return {
-            "next_ids": {"upload": 1, "review": 1, "book": 1, "chapter": 1, "section": 1, "version": 1, "suggestion": 1, "batch": 1},
+            "next_ids": {
+                "upload": 1,
+                "review": 1,
+                "book": 1,
+                "chapter": 1,
+                "section": 1,
+                "version": 1,
+                "suggestion": 1,
+                "batch": 1,
+                "worm_job": 1,
+            },
             "uploads": [],
             "batches": [],
+            "worm_jobs": [],
             "reviews": [],
             "books": [],
             "chapters": [],
@@ -48,14 +68,19 @@ class LibraryService:
     def _load_store(self):
         path = self._store_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists():
-            return self._empty_store()
-        return json.loads(path.read_text(encoding="utf-8"))
+        with _store_lock:
+            if not path.exists():
+                return self._empty_store()
+            return json.loads(path.read_text(encoding="utf-8"))
 
     def _save_store(self, store):
         path = self._store_path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(store, indent=2), encoding="utf-8")
+        payload = json.dumps(store, indent=2)
+        temp_path = path.with_suffix(".tmp")
+        with _store_lock:
+            temp_path.write_text(payload, encoding="utf-8")
+            temp_path.replace(path)
 
     def _next_id(self, store, key):
         store["next_ids"].setdefault(key, 1)
@@ -399,95 +424,295 @@ class LibraryService:
         self._save_store(store)
         return _ns(row)
 
-    def process_upload_submission(self, uploader, file_storages, grade, subject, title, description, save_upload_fn):
-        from .batches import batch_title_from_files, detect_source_type, folder_path_for_file
+    def _worm_timeout_seconds(self):
+        return int(current_app.config.get("WORM_AI_TIMEOUT", 120))
 
-        if not file_storages:
-            raise ValueError("Select a file to upload.")
-        source_type = detect_source_type(file_storages)
-        use_batch = source_type in {"multi", "folder"}
-        batch = None
-        if use_batch:
-            batch = self.create_batch(
-                uploader=uploader,
-                title=batch_title_from_files(file_storages, title),
-                source_type=source_type,
-                total_files=len(file_storages),
-            )
-        processed_reviews = []
-        errors = []
-        for file_storage in file_storages:
-            upload_meta = None
-            folder_path = folder_path_for_file(file_storage)
-            try:
-                upload_meta = save_upload_fn(file_storage)
-                upload = self.create_upload(
-                    uploader=uploader,
-                    filename=upload_meta["stored_filename"],
-                    stored_path=upload_meta["stored_path"],
-                    grade=grade,
-                    subject=subject,
-                    title=title,
-                    description=description,
-                    original_filename=upload_meta["original_filename"],
-                    mime_type=upload_meta["mime_type"],
-                    file_size=upload_meta["file_size"],
-                    sha256=upload_meta["sha256"],
-                    batch_id=batch.id if batch else None,
-                    folder_path=upload_meta.get("folder_path") or folder_path,
+    def create_worm_job(self, upload_id):
+        if self._db_enabled():
+            with db_connection(autocommit=False) as connection:
+                cursor = connection.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO library_worm_jobs (upload_id, status)
+                    VALUES (%s, 'pending')
+                    """,
+                    (upload_id,),
                 )
-                review = self.run_worm(upload.id)
-                processed_reviews.append(review)
-                self.record_batch_file_result(batch.id if batch else None, success=True, upload_id=upload.id)
-                log_action(
-                    uploader,
-                    f"Uploaded library source file={upload_meta['original_filename']} review_id={review.id}"
-                    + (f" batch_id={batch.id}" if batch else ""),
-                )
-            except ValueError as error:
-                if upload_meta:
-                    try:
-                        Path(upload_meta["stored_path"]).unlink(missing_ok=True)
-                    except OSError:
-                        current_app.logger.exception("Could not remove failed upload")
-                errors.append(str(error))
-                self.record_batch_file_result(batch.id if batch else None, success=False)
-            except Exception:
-                if upload_meta:
-                    try:
-                        Path(upload_meta["stored_path"]).unlink(missing_ok=True)
-                    except OSError:
-                        current_app.logger.exception("Could not remove failed upload")
-                current_app.logger.exception("Library upload failed")
-                errors.append("Upload could not be completed right now.")
-                self.record_batch_file_result(batch.id if batch else None, success=False)
-        if batch:
-            self.finalize_batch(batch.id)
-        if not processed_reviews and errors:
-            if len(errors) == 1:
-                raise ValueError(errors[0])
-            raise ValueError("; ".join(errors))
-        return {
-            "batch": batch,
-            "reviews": processed_reviews,
-            "errors": errors,
+                job_id = cursor.lastrowid
+                connection.commit()
+            return self.get_worm_job(job_id)
+        store = self._load_store()
+        job_id = self._next_id(store, "worm_job")
+        row = {
+            "id": job_id,
+            "upload_id": upload_id,
+            "status": "pending",
+            "started_at": None,
+            "completed_at": None,
+            "error_message": None,
+            "created_at": _utcnow_iso(),
         }
+        store.setdefault("worm_jobs", []).append(row)
+        self._save_store(store)
+        return _ns(row)
 
-    def run_worm(self, upload_id):
+    def get_worm_job(self, job_id):
+        if self._db_enabled():
+            with db_cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT j.id, j.upload_id, j.status, j.started_at, j.completed_at, j.error_message, j.created_at,
+                           u.original_filename, u.filename, u.uploader, u.batch_id
+                    FROM library_worm_jobs j
+                    JOIN library_uploads u ON u.id = j.upload_id
+                    WHERE j.id=%s
+                    """,
+                    (job_id,),
+                )
+                row = cursor.fetchone()
+            if not row:
+                return None
+            return _ns(
+                {
+                    "id": row[0],
+                    "upload_id": row[1],
+                    "status": row[2],
+                    "started_at": row[3],
+                    "completed_at": row[4],
+                    "error_message": row[5],
+                    "created_at": row[6],
+                    "source_file": row[7] or row[8],
+                    "uploader": row[9],
+                    "batch_id": row[10],
+                }
+            )
+        store = self._load_store()
+        job = next((item for item in store.get("worm_jobs", []) if item["id"] == job_id), None)
+        if not job:
+            return None
+        upload = next((item for item in store["uploads"] if item["id"] == job["upload_id"]), None)
+        payload = dict(job)
+        if upload:
+            payload["source_file"] = upload.get("original_filename") or upload.get("filename")
+            payload["uploader"] = upload.get("uploader")
+            payload["batch_id"] = upload.get("batch_id")
+        return _ns(payload)
+
+    def get_worm_job_for_upload(self, upload_id):
+        jobs = self.list_worm_jobs(upload_id=upload_id, limit=1)
+        return jobs[0] if jobs else None
+
+    def list_worm_jobs(self, statuses=None, upload_id=None, limit=50):
+        statuses = statuses or []
+        if self._db_enabled():
+            clauses = []
+            params = []
+            if statuses:
+                placeholders = ", ".join(["%s"] * len(statuses))
+                clauses.append(f"j.status IN ({placeholders})")
+                params.extend(statuses)
+            if upload_id:
+                clauses.append("j.upload_id=%s")
+                params.append(upload_id)
+            where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            with db_cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT j.id, j.upload_id, j.status, j.started_at, j.completed_at, j.error_message, j.created_at,
+                           u.original_filename, u.filename, u.uploader
+                    FROM library_worm_jobs j
+                    JOIN library_uploads u ON u.id = j.upload_id
+                    {where}
+                    ORDER BY j.created_at DESC, j.id DESC
+                    LIMIT %s
+                    """,
+                    tuple(params + [limit]),
+                )
+                rows = cursor.fetchall()
+            return [
+                _ns(
+                    {
+                        "id": row[0],
+                        "upload_id": row[1],
+                        "status": row[2],
+                        "started_at": row[3],
+                        "completed_at": row[4],
+                        "error_message": row[5],
+                        "created_at": row[6],
+                        "source_file": row[7] or row[8],
+                        "uploader": row[9],
+                    }
+                )
+                for row in rows
+            ]
+        store = self._load_store()
+        jobs = list(store.get("worm_jobs", []))
+        if statuses:
+            jobs = [item for item in jobs if item.get("status") in statuses]
+        if upload_id:
+            jobs = [item for item in jobs if item.get("upload_id") == upload_id]
+        jobs.sort(key=lambda item: item["id"], reverse=True)
+        uploads = {item["id"]: item for item in store["uploads"]}
+        out = []
+        for job in jobs[:limit]:
+            payload = dict(job)
+            upload = uploads.get(job["upload_id"])
+            if upload:
+                payload["source_file"] = upload.get("original_filename") or upload.get("filename")
+                payload["uploader"] = upload.get("uploader")
+            out.append(_ns(payload))
+        return out
+
+    def update_worm_job(self, job_id, status=None, started_at=None, completed_at=None, error_message=None):
+        if self._db_enabled():
+            fields = []
+            params = []
+            if status is not None:
+                fields.append("status=%s")
+                params.append(status)
+            if started_at is not None:
+                fields.append("started_at=%s")
+                params.append(started_at)
+            if completed_at is not None:
+                fields.append("completed_at=%s")
+                params.append(completed_at)
+            if error_message is not None:
+                fields.append("error_message=%s")
+                params.append(error_message)
+            if not fields:
+                return
+            params.append(job_id)
+            with db_cursor() as cursor:
+                cursor.execute(f"UPDATE library_worm_jobs SET {', '.join(fields)} WHERE id=%s", tuple(params))
+            return
+        store = self._load_store()
+        for job in store.get("worm_jobs", []):
+            if job["id"] == job_id:
+                if status is not None:
+                    job["status"] = status
+                if started_at is not None:
+                    job["started_at"] = started_at
+                if completed_at is not None:
+                    job["completed_at"] = completed_at
+                if error_message is not None:
+                    job["error_message"] = error_message
+        self._save_store(store)
+
+    def schedule_worm_job(self, upload_id):
+        job = self.create_worm_job(upload_id)
+        from .worm_worker import get_worm_worker
+
+        get_worm_worker().enqueue(upload_id, job.id, current_app._get_current_object())
+        return job
+
+    def resume_pending_worm_jobs(self, enqueue_fn):
+        jobs = self.list_worm_jobs(statuses=["pending", "processing"], limit=500)
+        for job in jobs:
+            if job.status == "processing":
+                self.update_worm_job(job.id, status="pending", started_at=None)
+            enqueue_fn(job.upload_id, job.id)
+
+    def retry_worm_job(self, upload_id, actor="ADMIN"):
         upload = self._load_upload(upload_id)
         if not upload:
-            raise ValueError("Upload not found.")
+            return {"ok": False, "message": "Upload not found."}
+        job = self.schedule_worm_job(upload_id)
+        if self._db_enabled():
+            with db_cursor() as cursor:
+                cursor.execute("UPDATE library_uploads SET status='pending' WHERE id=%s", (upload_id,))
+        else:
+            store = self._load_store()
+            for item in store["uploads"]:
+                if item["id"] == upload_id:
+                    item["status"] = "pending"
+            self._save_store(store)
+        log_action(actor, f"Library worm retry scheduled upload_id={upload_id} job_id={job.id}")
+        return {"ok": True, "message": f"Worm retry queued for upload #{upload_id}.", "job_id": job.id}
+
+    def execute_worm_job(self, upload_id, job_id):
+        job = self.get_worm_job(job_id)
+        if not job or job.upload_id != upload_id:
+            return None
+        if job.status == "completed":
+            return self.get_review_for_upload(upload_id)
+        self.update_worm_job(job_id, status="processing", started_at=_utcnow_iso(), error_message=None)
+        upload = self._load_upload(upload_id)
+        if not upload:
+            self._fail_worm_job(job_id, upload_id, "Upload not found.")
+            return None
         try:
             extracted_text = load_upload_text(upload.stored_path)
-            processed = run_worm_pipeline(get_dex_service(), upload, extracted_text)
-        except OSError as error:
-            log_action(upload.uploader, f"Library worm processing failure upload_id={upload_id}")
-            raise ValueError(f"Could not read uploaded file: {error}") from error
+            processed = run_worm_pipeline_timed(
+                get_dex_service(),
+                upload,
+                extracted_text,
+                self._worm_timeout_seconds(),
+            )
+            review = self._create_review_from_processed(upload_id, upload, processed)
+            self.update_worm_job(job_id, status="completed", completed_at=_utcnow_iso(), error_message=None)
+            self._mark_upload_processed(upload_id)
+            self.record_batch_file_result(getattr(upload, "batch_id", None), success=True, upload_id=upload_id)
+            if getattr(upload, "batch_id", None):
+                self._maybe_finalize_batch(upload.batch_id)
+            log_action(upload.uploader, f"Library worm completed upload_id={upload_id} review_id={review.id}")
+            return review
         except Exception as error:
-            current_app.logger.exception("Library worm processing failed")
+            current_app.logger.exception("Library worm job failed upload_id=%s job_id=%s", upload_id, job_id)
+            message = str(error) or "Worm could not process this upload right now."
+            self._fail_worm_job(job_id, upload_id, message)
             log_action(upload.uploader, f"Library worm processing failure upload_id={upload_id}")
-            raise ValueError("Worm could not process this upload right now.") from error
+            return None
 
+    def _fail_worm_job(self, job_id, upload_id, message):
+        self.update_worm_job(job_id, status="failed", completed_at=_utcnow_iso(), error_message=message)
+        if self._db_enabled():
+            with db_cursor() as cursor:
+                cursor.execute("UPDATE library_uploads SET status='worm_failed' WHERE id=%s", (upload_id,))
+        else:
+            store = self._load_store()
+            for item in store["uploads"]:
+                if item["id"] == upload_id:
+                    item["status"] = "worm_failed"
+            self._save_store(store)
+        upload = self._load_upload(upload_id)
+        batch_id = upload.batch_id if upload else None
+        self.record_batch_file_result(batch_id, success=False)
+        if batch_id:
+            self._maybe_finalize_batch(batch_id)
+
+    def _mark_upload_processed(self, upload_id):
+        if self._db_enabled():
+            with db_cursor() as cursor:
+                cursor.execute("UPDATE library_uploads SET status='processed' WHERE id=%s", (upload_id,))
+            return
+        store = self._load_store()
+        for item in store["uploads"]:
+            if item["id"] == upload_id:
+                item["status"] = "processed"
+        self._save_store(store)
+
+    def _maybe_finalize_batch(self, batch_id):
+        batch = self.get_batch(batch_id)
+        if not batch:
+            return
+        finished = batch.processed_files + batch.failed_files
+        if finished >= batch.total_files:
+            self.finalize_batch(batch_id)
+
+    def get_review_for_upload(self, upload_id):
+        if self._db_enabled():
+            with db_cursor() as cursor:
+                cursor.execute(
+                    "SELECT id FROM library_review_queue WHERE upload_id=%s ORDER BY id DESC LIMIT 1",
+                    (upload_id,),
+                )
+                row = cursor.fetchone()
+            return self.get_review(row[0]) if row else None
+        store = self._load_store()
+        review = next((item for item in reversed(store["reviews"]) if item["upload_id"] == upload_id), None)
+        return _ns(review) if review else None
+
+    def _create_review_from_processed(self, upload_id, upload, processed):
         if self._db_enabled():
             with db_connection(autocommit=False) as connection:
                 cursor = connection.cursor()
@@ -516,7 +741,6 @@ class LibraryService:
                         "INSERT INTO library_review_topics (review_id, topic_id) VALUES (%s, %s)",
                         (review_id, topic_id),
                     )
-                cursor.execute("UPDATE library_uploads SET status='processed' WHERE id=%s", (upload_id,))
                 connection.commit()
             return self.get_review(review_id)
 
@@ -534,16 +758,101 @@ class LibraryService:
                 "suggested_section": processed["suggested_section"],
                 "confidence": processed["confidence"],
                 "ai_suggestions": processed.get("ai_suggestions", {}),
-                "source_file": upload.filename,
+                "source_file": upload.original_filename if hasattr(upload, "original_filename") else upload.filename,
                 "status": "pending",
                 "created_at": "now",
             }
         )
-        for item in store["uploads"]:
-            if item["id"] == upload_id:
-                item["status"] = "processed"
         self._save_store(store)
         return self.get_review(review_id)
+
+    def process_upload_submission(self, uploader, file_storages, grade, subject, title, description, save_upload_fn):
+        from .batches import batch_title_from_files, detect_source_type, folder_path_for_file
+
+        if not file_storages:
+            raise ValueError("Select a file to upload.")
+        source_type = detect_source_type(file_storages)
+        use_batch = source_type in {"multi", "folder"}
+        batch = None
+        if use_batch:
+            batch = self.create_batch(
+                uploader=uploader,
+                title=batch_title_from_files(file_storages, title),
+                source_type=source_type,
+                total_files=len(file_storages),
+            )
+        processed_reviews = []
+        queued_jobs = []
+        errors = []
+        for file_storage in file_storages:
+            upload_meta = None
+            folder_path = folder_path_for_file(file_storage)
+            try:
+                upload_meta = save_upload_fn(file_storage)
+                upload = self.create_upload(
+                    uploader=uploader,
+                    filename=upload_meta["stored_filename"],
+                    stored_path=upload_meta["stored_path"],
+                    grade=grade,
+                    subject=subject,
+                    title=title,
+                    description=description,
+                    original_filename=upload_meta["original_filename"],
+                    mime_type=upload_meta["mime_type"],
+                    file_size=upload_meta["file_size"],
+                    sha256=upload_meta["sha256"],
+                    batch_id=batch.id if batch else None,
+                    folder_path=upload_meta.get("folder_path") or folder_path,
+                )
+                job = self.schedule_worm_job(upload.id)
+                queued_jobs.append(job)
+                log_action(
+                    uploader,
+                    f"Uploaded library source file={upload_meta['original_filename']} worm_job_id={job.id}"
+                    + (f" batch_id={batch.id}" if batch else ""),
+                )
+            except ValueError as error:
+                if upload_meta:
+                    try:
+                        Path(upload_meta["stored_path"]).unlink(missing_ok=True)
+                    except OSError:
+                        current_app.logger.exception("Could not remove failed upload")
+                errors.append(str(error))
+                self.record_batch_file_result(batch.id if batch else None, success=False)
+            except Exception:
+                if upload_meta:
+                    try:
+                        Path(upload_meta["stored_path"]).unlink(missing_ok=True)
+                    except OSError:
+                        current_app.logger.exception("Could not remove failed upload")
+                current_app.logger.exception("Library upload failed")
+                errors.append("Upload could not be completed right now.")
+                self.record_batch_file_result(batch.id if batch else None, success=False)
+        if not queued_jobs and errors:
+            if batch:
+                self.finalize_batch(batch.id)
+            if len(errors) == 1:
+                raise ValueError(errors[0])
+            raise ValueError("; ".join(errors))
+        return {
+            "batch": batch,
+            "jobs": queued_jobs,
+            "reviews": processed_reviews,
+            "errors": errors,
+        }
+
+    def run_worm(self, upload_id):
+        job = self.schedule_worm_job(upload_id)
+        from .worm_worker import get_worm_worker
+
+        get_worm_worker().drain(timeout=10)
+        review = self.get_review_for_upload(upload_id)
+        if review:
+            return review
+        job = self.get_worm_job(job.id)
+        if job and job.status == "failed":
+            raise ValueError(job.error_message or "Worm could not process this upload right now.")
+        raise ValueError("Worm could not process this upload right now.")
 
     def list_reviews(self):
         if self._db_enabled():
@@ -739,15 +1048,19 @@ class LibraryService:
             if self._db_enabled():
                 with db_cursor() as cursor:
                     cursor.execute("UPDATE library_review_queue SET status='reprocessed' WHERE id=%s", (review_id,))
-                refreshed = self.run_worm(item.upload_id)
             else:
                 store = self._load_store()
                 for review in store["reviews"]:
                     if review["id"] == review_id:
                         review["status"] = "reprocessed"
                 self._save_store(store)
-                refreshed = self.run_worm(item.upload_id)
-            return {"ok": True, "message": f"Reprocessed as review #{refreshed.id}."}
+            result = self.retry_worm_job(item.upload_id, actor=actor)
+            get_worm_worker = __import__("dexweb.features.library.worm_worker", fromlist=["get_worm_worker"]).get_worm_worker
+            get_worm_worker().drain(timeout=10)
+            refreshed = self.get_review_for_upload(item.upload_id)
+            if refreshed:
+                return {"ok": True, "message": f"Reprocessed as review #{refreshed.id}."}
+            return result
 
         chapter_title = (edits.get("chapter_title") or item.suggested_chapter).strip() or item.suggested_chapter
         section_title = (edits.get("section_title") or item.suggested_section).strip() or item.suggested_section

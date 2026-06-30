@@ -1,5 +1,8 @@
+import concurrent.futures
 import json
 import re
+
+from flask import current_app
 
 from .search import tokenize_topics
 
@@ -69,6 +72,23 @@ def _coerce_confidence(value, fallback=0.72):
     except (TypeError, ValueError):
         return fallback
     return max(0.0, min(1.0, score))
+
+
+def run_worm_pipeline_timed(dex_service, upload, extracted_text, timeout):
+    from flask import current_app
+
+    app = current_app._get_current_object()
+
+    def run_in_context():
+        with app.app_context():
+            return run_worm_pipeline(dex_service, upload, extracted_text)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(run_in_context)
+        try:
+            return future.result(timeout=timeout)
+        except concurrent.futures.TimeoutError as exc:
+            raise TimeoutError(f"Worm AI processing exceeded {timeout}s timeout") from exc
 
 
 def run_worm_pipeline(dex_service, upload, extracted_text):
