@@ -1,9 +1,12 @@
 {% extends "base.html" %}
 {% block title %}Library Search - {{ site.brand }}{% endblock %}
 {% block content %}
-<section class="panel">
-  <h1>Search Library</h1>
-  <form method="get" class="admin-grid">
+<section class="panel page-panel">
+  <header class="page-header">
+    <h1>Search Library</h1>
+    <p class="hint">Filter published material by grade, subject, topic, or keyword.</p>
+  </header>
+  <form method="get" class="admin-grid form-panel">
     <input type="number" name="grade" placeholder="Grade" value="{{ request.args.get('grade', '') }}">
     <input type="text" name="subject" placeholder="Subject" value="{{ request.args.get('subject', '') }}">
     <input type="text" name="topic" placeholder="Topic" value="{{ request.args.get('topic', '') }}">
@@ -12,16 +15,20 @@
   </form>
   {% if results %}
     <h2>Results</h2>
-    {% for row in results %}
-      <article class="result" style="margin-bottom: 12px;">
-        <strong>Grade {{ row.grade or "?" }} - {{ row.subject }} - {{ row.chapter_title }}</strong>
-        <p>{{ row.title }}</p>
-        <p>{{ row.content[:250] }}{% if row.content|length > 250 %}...{% endif %}</p>
+    <div class="stack">
+      {% for row in results %}
+      <article class="card">
+        <p class="card-title">Grade {{ row.grade or "?" }} - {{ row.subject }} - {{ row.chapter_title }}</p>
+        <p><strong>{{ row.title }}</strong></p>
+        <p class="hint">{{ row.content[:250] }}{% if row.content|length > 250 %}...{% endif %}</p>
       </article>
-    {% endfor %}
+      {% endfor %}
+    </div>
   {% else %}
     <p class="hint">No results.</p>
   {% endif %}
-  <a class="button ghost" href="{{ url_for('main.library_home') }}">Back</a>
+  <nav class="page-nav">
+    <a class="button ghost" href="{{ url_for('main.library_home') }}">Back to Library</a>
+  </nav>
 </section>
 {% endblock %}

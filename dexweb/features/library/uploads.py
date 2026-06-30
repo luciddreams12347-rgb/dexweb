@@ -41,13 +41,24 @@ def _max_upload_bytes():
     return int(current_app.config.get("LIBRARY_MAX_UPLOAD_BYTES", 10 * 1024 * 1024))
 
 
+def split_upload_path(filename):
+    normalized = (filename or "").replace("\\", "/").strip()
+    if "/" in normalized:
+        folder_path, basename = normalized.rsplit("/", 1)
+        return folder_path.strip(), basename.strip()
+    return "", normalized.strip()
+
+
 def validate_upload(file_storage: FileStorage):
     original_filename = file_storage.filename or ""
     if not original_filename:
         raise ValueError("Select a file to upload.")
-    if not allowed_upload(original_filename):
+    folder_path, basename = split_upload_path(original_filename)
+    if not basename:
+        raise ValueError("Invalid filename.")
+    if not allowed_upload(basename):
         raise ValueError("Unsupported file type.")
-    safe_name = secure_filename(original_filename)
+    safe_name = secure_filename(basename)
     if not safe_name:
         raise ValueError("Invalid filename.")
     suffix = Path(safe_name).suffix.lower()
@@ -68,7 +79,9 @@ def validate_upload(file_storage: FileStorage):
         raise ValueError("Uploaded file is too large.")
     digest = hashlib.sha256(content).hexdigest()
     return {
-        "original_filename": original_filename,
+        "original_filename": basename,
+        "original_path": original_filename,
+        "folder_path": folder_path,
         "safe_filename": safe_name,
         "mime_type": detected_mime or guessed_mime or "application/octet-stream",
         "file_size": size,

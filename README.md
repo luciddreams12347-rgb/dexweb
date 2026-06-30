@@ -6,7 +6,7 @@ The app is organized as a normal Python package so it can grow into a larger pla
 
 DEX is now available as the central AI service under `dexweb/features/dex/`. See `DEX.md` for admin controls, prompt management, and future provider integration.
 
-DEX Library V1 is available under `dexweb/features/library/` and adds upload->Worm->admin-review->published textbook flow using the existing centralized DEX service.
+DEX Library V1 is available under `dexweb/features/library/` and adds upload->Worm->admin-review->published textbook flow using the existing centralized DEX service. Library uploads support single files, multiple files, and folder uploads grouped into optional upload batches.
 
 ## Project Structure
 
@@ -91,6 +91,8 @@ Important variables:
 - `OLLAMA_URL`: Ollama base URL when `DEX_PROVIDER=ollama`. Defaults to `http://localhost:11434`. Ollama runs locally and does not require an external API key.
 - `LIBRARY_UPLOADS_DIR`: optional writable directory for uploaded library source files.
 - `LIBRARY_MAX_UPLOAD_BYTES`: maximum accepted upload size in bytes for DEX Library uploads.
+
+Library uploads accept PDF, DOCX, TXT, and image files. Users can upload one file, multiple files, or a full folder; multi-file and folder uploads are tracked as upload batches while each file still gets its own Worm review item.
 
 ## Database Setup
 
@@ -212,7 +214,7 @@ docker run --env-file .env -p 5000:5000 dexweb
 
 If database tables change, add a new SQL file in `database/` and run it on the production database before or during deployment.
 
-DEX Library V1 adds `database/library_v1.sql` for normalized upload, review queue, books/chapters/sections, versions, sources, and suggestions tables, plus `database/library_v1_1.sql` for production upload metadata and indexes.
+DEX Library V1 adds `database/library_v1.sql` for normalized upload, review queue, books/chapters/sections, versions, sources, and suggestions tables, plus `database/library_v1_1.sql` for production upload metadata and indexes, and `database/library_v1_2.sql` for upload batch tracking.
 
 ## Add Future Features Safely
 

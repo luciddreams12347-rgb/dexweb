@@ -1,24 +1,46 @@
 {% extends "base.html" %}
 {% block title %}Library - {{ site.brand }}{% endblock %}
 {% block content %}
-<section class="panel">
-  <h1>DEX Library</h1>
-  <div class="button-row">
+<section class="panel page-panel">
+  <header class="page-header">
+    <h1>DEX Library</h1>
+    <p class="hint">Upload source material, review with admins, and read published chapters.</p>
+  </header>
+  {% if batch_message %}<p class="hint status-banner">{{ batch_message }}</p>{% endif %}
+  <nav class="button-row page-actions">
     <a class="button" href="{{ url_for('main.library_upload') }}">Upload Material</a>
     <a class="button" href="{{ url_for('main.library_search') }}">Search</a>
     {% if session.get("is_admin") %}
       <a class="button" href="{{ url_for('main.library_review_queue') }}">Review Queue</a>
       <a class="button" href="{{ url_for('main.admin_library') }}">Admin Library</a>
     {% endif %}
-  </div>
+  </nav>
+  {% if batches %}
+    <h2>Recent Upload Batches</h2>
+    <div class="stack">
+      {% for batch in batches %}
+      <article class="card card-compact">
+        <p><strong>{{ batch.title }}</strong> <span class="hint">({{ batch.status }})</span></p>
+        <p class="hint">
+          {{ batch.total_files }} uploaded,
+          {{ batch.processed_files }} processed
+          {% set waiting = batch.total_files - batch.processed_files - batch.failed_files %}
+          {% if waiting > 0 %}, {{ waiting }} waiting{% endif %}
+          {% if batch.failed_files %}, {{ batch.failed_files }} failed{% endif %}
+        </p>
+        <a class="button ghost" href="{{ url_for('main.library_batch', batch_id=batch.id) }}">View Batch</a>
+      </article>
+      {% endfor %}
+    </div>
+  {% endif %}
   {% if chapters %}
     <h2>Published Chapters</h2>
     <div class="stack">
       {% for chapter in chapters %}
-      <article class="message">
-        <strong>Grade {{ chapter.grade or "?" }} - {{ chapter.subject }} - {{ chapter.title }}</strong><br>
+      <article class="card">
+        <p class="card-title">Grade {{ chapter.grade or "?" }} - {{ chapter.subject }} - {{ chapter.title }}</p>
         {% if viewer_grade and chapter.grade and chapter.grade > viewer_grade %}
-          <span class="hint">This material is above your selected grade level.</span><br>
+          <p class="hint">This material is above your selected grade level.</p>
         {% endif %}
         <a class="button" href="{{ url_for('main.library_chapter', chapter_id=chapter.id) }}">Open Chapter</a>
       </article>
@@ -27,6 +49,8 @@
   {% else %}
     <p class="hint">No published chapters yet.</p>
   {% endif %}
-  <a class="button ghost" href="{{ url_for('main.home') }}">Back</a>
+  <nav class="page-nav">
+    <a class="button ghost" href="{{ url_for('main.home') }}">Back to Home</a>
+  </nav>
 </section>
 {% endblock %}

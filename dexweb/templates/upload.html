@@ -1,17 +1,33 @@
 {% extends "base.html" %}
 {% block title %}Library Upload - {{ site.brand }}{% endblock %}
 {% block content %}
-<section class="panel">
-  <h1>Upload Learning Material</h1>
+<section class="panel page-panel">
+  <header class="page-header">
+    <h1>Upload Learning Material</h1>
+    <p class="hint">Upload one file, multiple files, or an entire folder. Each file is processed separately by Worm.</p>
+  </header>
   {% if message %}<p class="error">{{ message }}</p>{% endif %}
-  <form method="post" enctype="multipart/form-data" class="stack">
-    <input type="file" name="file" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.webp,.gif" required>
+  <form method="post" enctype="multipart/form-data" class="stack form-panel" id="library-upload-form">
+    <div class="upload-zone">
+      <label class="field-label" for="upload-files">Files</label>
+      <input id="upload-files" type="file" name="files" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg,.webp,.gif" multiple>
+      <p class="hint">Select one or more supported files (PDF, DOCX, TXT, images).</p>
+    </div>
+    <div class="upload-zone">
+      <label class="field-label" for="upload-folder">Folder</label>
+      <input id="upload-folder" type="file" name="folder_files" webkitdirectory directory multiple>
+      <p class="hint">Or choose a folder to preserve folder structure during upload.</p>
+    </div>
+    <p class="hint upload-selection" id="upload-selection">No files selected.</p>
     <input type="number" min="1" max="12" name="grade" placeholder="Grade (optional)">
     <input type="text" name="subject" placeholder="Subject" required>
-    <input type="text" name="title" placeholder="Title (optional)">
+    <input type="text" name="title" placeholder="Batch title (optional)">
     <textarea name="description" rows="4" placeholder="Description (optional)"></textarea>
     <button type="submit">Upload + Send To Worm</button>
   </form>
-  <a class="button ghost" href="{{ url_for('main.library_home') }}">Back</a>
+  <nav class="page-nav">
+    <a class="button ghost" href="{{ url_for('main.library_home') }}">Back to Library</a>
+  </nav>
 </section>
+<script src="{{ url_for('static', filename='js/library_upload.js') }}" defer></script>
 {% endblock %}

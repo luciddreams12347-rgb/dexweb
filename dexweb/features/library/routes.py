@@ -1,10 +1,9 @@
-from pathlib import Path
+from flask import redirect, render_template, request, session, url_for
 
-from flask import current_app, redirect, render_template, request, session, url_for
-
-from ...database import is_banned, log_action
+from ...database import is_banned
 from ...routes import main
 from ..auth.session import login_required
+from .batches import collect_upload_files
 from .permissions import user_is_admin
 from .review import normalize_admin_action
 from .service import get_library_service
@@ -23,7 +22,16 @@ def library_home():
     if subject:
         chapters = [row for row in chapters if row.get("subject", "").lower() == subject.lower()]
     viewer_grade = session.get("grade")
-    return render_template("library_home.html", chapters=chapters, viewer_grade=viewer_grade)
+    username = session.get("user")
+    batches = service.list_batches(uploader=username) if username else []
+    batch_message = request.args.get("batch_message", "").strip()
+    return render_template(
+        "library_home.html",
+        chapters=chapters,
+        viewer_grade=viewer_grade,
+        batches=batches,
+        batch_message=batch_message,
+    )
 
 
 @main.route("/library/upload", methods=["GET", "POST"])
@@ -36,47 +44,53 @@ def library_upload():
     service = get_library_service()
     message = ""
     if request.method == "POST":
-        file_storage = request.files.get("file")
-        if not file_storage or not file_storage.filename:
-            message = "Select a file to upload."
-        else:
-            grade_raw = (request.form.get("grade") or "").strip()
-            grade = int(grade_raw) if grade_raw.isdigit() else None
-            upload_meta = None
-            try:
-                upload_meta = save_upload(file_storage)
-                upload = service.create_upload(
-                    uploader=username,
-                    filename=upload_meta["stored_filename"],
-                    stored_path=upload_meta["stored_path"],
-                    grade=grade,
-                    subject=(request.form.get("subject") or "").strip() or "General",
-                    title=(request.form.get("title") or "").strip(),
-                    description=(request.form.get("description") or "").strip(),
-                    original_filename=upload_meta["original_filename"],
-                    mime_type=upload_meta["mime_type"],
-                    file_size=upload_meta["file_size"],
-                    sha256=upload_meta["sha256"],
+        files = collect_upload_files(request)
+        grade_raw = (request.form.get("grade") or "").strip()
+        grade = int(grade_raw) if grade_raw.isdigit() else None
+        try:
+            result = service.process_upload_submission(
+                uploader=username,
+                file_storages=files,
+                grade=grade,
+                subject=(request.form.get("subject") or "").strip() or "General",
+                title=(request.form.get("title") or "").strip(),
+                description=(request.form.get("description") or "").strip(),
+                save_upload_fn=save_upload,
+            )
+            if result["batch"]:
+                batch = result["batch"]
+                waiting = max(batch.total_files - batch.processed_files - batch.failed_files, 0)
+                summary = (
+                    f"{batch.title}: {batch.total_files} uploaded, "
+                    f"{batch.processed_files} processed"
+                    + (f", {waiting} waiting" if waiting else "")
+                    + (f", {batch.failed_files} failed" if batch.failed_files else "")
                 )
-                review = service.run_worm(upload.id)
-                log_action(username, f"Uploaded library source file={upload_meta['original_filename']} review_id={review.id}")
+                return redirect(url_for("main.library_home", batch_message=summary))
+            if result["errors"]:
+                message = result["errors"][0]
+            else:
                 return redirect(url_for("main.library_home"))
-            except ValueError as error:
-                if upload_meta:
-                    try:
-                        Path(upload_meta["stored_path"]).unlink(missing_ok=True)
-                    except OSError:
-                        current_app.logger.exception("Could not remove failed upload")
-                message = str(error)
-            except Exception:
-                if upload_meta:
-                    try:
-                        Path(upload_meta["stored_path"]).unlink(missing_ok=True)
-                    except OSError:
-                        current_app.logger.exception("Could not remove failed upload")
-                current_app.logger.exception("Library upload failed")
-                message = "Upload could not be completed right now."
+        except ValueError as error:
+            message = str(error)
+        except Exception:
+            current_app.logger.exception("Library upload failed")
+            message = "Upload could not be completed right now."
     return render_template("upload.html", message=message)
+
+
+@main.route("/library/batch/<int:batch_id>")
+def library_batch(batch_id):
+    if not login_required():
+        return redirect(url_for("main.login"))
+    service = get_library_service()
+    batch = service.get_batch(batch_id)
+    if not batch:
+        return render_template("message.html", message="Upload batch not found."), 404
+    username = session.get("user")
+    if batch.uploader != username and not session.get("is_admin"):
+        return render_template("message.html", message="You do not have access to this batch."), 403
+    return render_template("batch_status.html", batch=batch)
 
 
 @main.route("/library/review", methods=["GET", "POST"])
@@ -179,4 +193,3 @@ def admin_library():
         sources=sources,
         message=message,
     )
-

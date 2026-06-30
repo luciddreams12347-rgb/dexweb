@@ -32,8 +32,9 @@ class LibraryService:
 
     def _empty_store(self):
         return {
-            "next_ids": {"upload": 1, "review": 1, "book": 1, "chapter": 1, "section": 1, "version": 1, "suggestion": 1},
+            "next_ids": {"upload": 1, "review": 1, "book": 1, "chapter": 1, "section": 1, "version": 1, "suggestion": 1, "batch": 1},
             "uploads": [],
+            "batches": [],
             "reviews": [],
             "books": [],
             "chapters": [],
@@ -57,6 +58,7 @@ class LibraryService:
         path.write_text(json.dumps(store, indent=2), encoding="utf-8")
 
     def _next_id(self, store, key):
+        store["next_ids"].setdefault(key, 1)
         value = store["next_ids"][key]
         store["next_ids"][key] += 1
         return value
@@ -67,7 +69,8 @@ class LibraryService:
                 cursor.execute(
                     """
                     SELECT u.id, u.uploader, u.filename, u.stored_path, g.grade_level, s.name, u.title, u.description,
-                           u.uploaded_at, u.status, u.original_filename, u.mime_type, u.file_size, u.sha256
+                           u.uploaded_at, u.status, u.original_filename, u.mime_type, u.file_size, u.sha256,
+                           u.batch_id, u.folder_path
                     FROM library_uploads u
                     LEFT JOIN library_grades g ON g.id = u.grade_id
                     LEFT JOIN library_subjects s ON s.id = u.subject_id
@@ -94,6 +97,8 @@ class LibraryService:
                     "mime_type": row[11] or "",
                     "file_size": row[12] or 0,
                     "sha256": row[13] or "",
+                    "batch_id": row[14],
+                    "folder_path": row[15] or "",
                 }
             )
         store = self._load_store()
@@ -127,7 +132,201 @@ class LibraryService:
         cursor.execute("INSERT INTO library_topics (name) VALUES (%s)", (name,))
         return cursor.lastrowid
 
-    def create_upload(self, uploader, filename, stored_path, grade, subject, title, description, original_filename=None, mime_type="", file_size=0, sha256=""):
+    def create_batch(self, uploader, title, source_type, total_files):
+        if self._db_enabled():
+            with db_connection(autocommit=False) as connection:
+                cursor = connection.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO library_upload_batches
+                    (uploader, title, source_type, status, total_files, processed_files, failed_files)
+                    VALUES (%s, %s, %s, 'processing', %s, 0, 0)
+                    """,
+                    (uploader, title.strip() or "Upload batch", source_type, total_files),
+                )
+                batch_id = cursor.lastrowid
+                connection.commit()
+            return self.get_batch(batch_id)
+        store = self._load_store()
+        batch_id = self._next_id(store, "batch")
+        row = {
+            "id": batch_id,
+            "uploader": uploader,
+            "title": title.strip() or "Upload batch",
+            "source_type": source_type,
+            "status": "processing",
+            "total_files": total_files,
+            "processed_files": 0,
+            "failed_files": 0,
+            "uploaded_at": "now",
+            "upload_ids": [],
+        }
+        store.setdefault("batches", []).append(row)
+        self._save_store(store)
+        return _ns(row)
+
+    def record_batch_file_result(self, batch_id, success, upload_id=None):
+        if not batch_id:
+            return
+        if self._db_enabled():
+            with db_cursor() as cursor:
+                if success:
+                    cursor.execute(
+                        "UPDATE library_upload_batches SET processed_files = processed_files + 1 WHERE id=%s",
+                        (batch_id,),
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE library_upload_batches SET failed_files = failed_files + 1 WHERE id=%s",
+                        (batch_id,),
+                    )
+            return
+        store = self._load_store()
+        batch = next((item for item in store.get("batches", []) if item["id"] == batch_id), None)
+        if not batch:
+            return
+        if success:
+            batch["processed_files"] += 1
+            if upload_id:
+                batch.setdefault("upload_ids", []).append(upload_id)
+        else:
+            batch["failed_files"] += 1
+        self._save_store(store)
+
+    def finalize_batch(self, batch_id):
+        if not batch_id:
+            return
+        batch = self.get_batch(batch_id)
+        if not batch:
+            return
+        finished = batch.processed_files + batch.failed_files
+        if batch.failed_files and batch.processed_files:
+            status = "partial"
+        elif batch.failed_files:
+            status = "failed"
+        elif finished >= batch.total_files:
+            status = "completed"
+        else:
+            status = "processing"
+        if self._db_enabled():
+            with db_cursor() as cursor:
+                cursor.execute("UPDATE library_upload_batches SET status=%s WHERE id=%s", (status, batch_id))
+            return
+        store = self._load_store()
+        for item in store.get("batches", []):
+            if item["id"] == batch_id:
+                item["status"] = status
+        self._save_store(store)
+
+    def list_batches(self, uploader=None, limit=20):
+        if self._db_enabled():
+            clauses = []
+            params = []
+            if uploader:
+                clauses.append("uploader=%s")
+                params.append(uploader)
+            where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+            with db_cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT id, uploader, title, source_type, status, total_files, processed_files, failed_files, created_at
+                    FROM library_upload_batches
+                    {where}
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT %s
+                    """,
+                    tuple(params + [limit]),
+                )
+                rows = cursor.fetchall()
+            return [
+                _ns(
+                    {
+                        "id": row[0],
+                        "uploader": row[1],
+                        "title": row[2],
+                        "source_type": row[3],
+                        "status": row[4],
+                        "total_files": row[5],
+                        "processed_files": row[6],
+                        "failed_files": row[7],
+                        "uploaded_at": row[8],
+                    }
+                )
+                for row in rows
+            ]
+        store = self._load_store()
+        batches = list(store.get("batches", []))
+        if uploader:
+            batches = [item for item in batches if item["uploader"] == uploader]
+        batches.sort(key=lambda item: item["id"], reverse=True)
+        return [_ns(item) for item in batches[:limit]]
+
+    def get_batch(self, batch_id):
+        if self._db_enabled():
+            with db_cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, uploader, title, source_type, status, total_files, processed_files, failed_files, created_at
+                    FROM library_upload_batches
+                    WHERE id=%s
+                    """,
+                    (batch_id,),
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                cursor.execute(
+                    """
+                    SELECT id, original_filename, folder_path, status
+                    FROM library_uploads
+                    WHERE batch_id=%s
+                    ORDER BY id
+                    """,
+                    (batch_id,),
+                )
+                uploads = cursor.fetchall()
+            return _ns(
+                {
+                    "id": row[0],
+                    "uploader": row[1],
+                    "title": row[2],
+                    "source_type": row[3],
+                    "status": row[4],
+                    "total_files": row[5],
+                    "processed_files": row[6],
+                    "failed_files": row[7],
+                    "uploaded_at": row[8],
+                    "uploads": [
+                        {"id": item[0], "original_filename": item[1], "folder_path": item[2] or "", "status": item[3]}
+                        for item in uploads
+                    ],
+                }
+            )
+        store = self._load_store()
+        batch = next((item for item in store.get("batches", []) if item["id"] == batch_id), None)
+        if not batch:
+            return None
+        uploads = [item for item in store["uploads"] if item.get("batch_id") == batch_id]
+        payload = dict(batch)
+        payload["uploads"] = uploads
+        return _ns(payload)
+
+    def create_upload(
+        self,
+        uploader,
+        filename,
+        stored_path,
+        grade,
+        subject,
+        title,
+        description,
+        original_filename=None,
+        mime_type="",
+        file_size=0,
+        sha256="",
+        batch_id=None,
+        folder_path="",
+    ):
         if self._db_enabled():
             try:
                 with db_connection(autocommit=False) as connection:
@@ -148,14 +347,16 @@ class LibraryService:
                     cursor.execute(
                         """
                         INSERT INTO library_uploads
-                        (uploader, filename, stored_path, title, description, grade_id, subject_id, status,
+                        (batch_id, uploader, filename, stored_path, folder_path, title, description, grade_id, subject_id, status,
                          original_filename, mime_type, file_size, sha256)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', %s, %s, %s, %s)
                         """,
                         (
+                            batch_id,
                             uploader,
                             filename,
                             stored_path,
+                            folder_path or None,
                             title.strip(),
                             description.strip(),
                             grade_id,
@@ -178,9 +379,11 @@ class LibraryService:
         upload_id = self._next_id(store, "upload")
         row = {
             "id": upload_id,
+            "batch_id": batch_id,
             "uploader": uploader,
             "filename": filename,
             "stored_path": stored_path,
+            "folder_path": folder_path or "",
             "grade": grade,
             "subject": subject.strip() or "General",
             "title": title.strip(),
@@ -195,6 +398,80 @@ class LibraryService:
         store["uploads"].append(row)
         self._save_store(store)
         return _ns(row)
+
+    def process_upload_submission(self, uploader, file_storages, grade, subject, title, description, save_upload_fn):
+        from .batches import batch_title_from_files, detect_source_type, folder_path_for_file
+
+        if not file_storages:
+            raise ValueError("Select a file to upload.")
+        source_type = detect_source_type(file_storages)
+        use_batch = source_type in {"multi", "folder"}
+        batch = None
+        if use_batch:
+            batch = self.create_batch(
+                uploader=uploader,
+                title=batch_title_from_files(file_storages, title),
+                source_type=source_type,
+                total_files=len(file_storages),
+            )
+        processed_reviews = []
+        errors = []
+        for file_storage in file_storages:
+            upload_meta = None
+            folder_path = folder_path_for_file(file_storage)
+            try:
+                upload_meta = save_upload_fn(file_storage)
+                upload = self.create_upload(
+                    uploader=uploader,
+                    filename=upload_meta["stored_filename"],
+                    stored_path=upload_meta["stored_path"],
+                    grade=grade,
+                    subject=subject,
+                    title=title,
+                    description=description,
+                    original_filename=upload_meta["original_filename"],
+                    mime_type=upload_meta["mime_type"],
+                    file_size=upload_meta["file_size"],
+                    sha256=upload_meta["sha256"],
+                    batch_id=batch.id if batch else None,
+                    folder_path=upload_meta.get("folder_path") or folder_path,
+                )
+                review = self.run_worm(upload.id)
+                processed_reviews.append(review)
+                self.record_batch_file_result(batch.id if batch else None, success=True, upload_id=upload.id)
+                log_action(
+                    uploader,
+                    f"Uploaded library source file={upload_meta['original_filename']} review_id={review.id}"
+                    + (f" batch_id={batch.id}" if batch else ""),
+                )
+            except ValueError as error:
+                if upload_meta:
+                    try:
+                        Path(upload_meta["stored_path"]).unlink(missing_ok=True)
+                    except OSError:
+                        current_app.logger.exception("Could not remove failed upload")
+                errors.append(str(error))
+                self.record_batch_file_result(batch.id if batch else None, success=False)
+            except Exception:
+                if upload_meta:
+                    try:
+                        Path(upload_meta["stored_path"]).unlink(missing_ok=True)
+                    except OSError:
+                        current_app.logger.exception("Could not remove failed upload")
+                current_app.logger.exception("Library upload failed")
+                errors.append("Upload could not be completed right now.")
+                self.record_batch_file_result(batch.id if batch else None, success=False)
+        if batch:
+            self.finalize_batch(batch.id)
+        if not processed_reviews and errors:
+            if len(errors) == 1:
+                raise ValueError(errors[0])
+            raise ValueError("; ".join(errors))
+        return {
+            "batch": batch,
+            "reviews": processed_reviews,
+            "errors": errors,
+        }
 
     def run_worm(self, upload_id):
         upload = self._load_upload(upload_id)

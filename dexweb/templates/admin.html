@@ -1,8 +1,10 @@
 {% extends "base.html" %}
 {% block title %}Admin - {{ site.brand }}{% endblock %}
 {% block content %}
-<section class="panel">
-  <h1>Admin Panel</h1>
+<section class="panel page-panel">
+  <header class="page-header">
+    <h1>Admin Panel</h1>
+  </header>
   {% if admin_message %}<p class="hint">{{ admin_message }}</p>{% endif %}
   {% if not db_enabled %}<p class="hint">Database is disabled; admin data is empty in template/demo mode.</p>{% endif %}
   <div class="button-row">
@@ -67,6 +69,8 @@
 {% endfor %}</pre>
   <h2>Site Logs</h2>
   <pre class="result">{{ site_logs }}</pre>
-  <a class="button ghost" href="{{ url_for('main.home') }}">Back</a>
+  <nav class="page-nav">
+    <a class="button ghost" href="{{ url_for('main.home') }}">Back to Home</a>
+  </nav>
 </section>
 {% endblock %}

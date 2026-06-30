@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Upload Batch - {{ site.brand }}{% endblock %}
+{% block content %}
+<section class="panel page-panel">
+  <header class="page-header">
+    <h1>{{ batch.title }}</h1>
+    <p class="hint">Status: {{ batch.status }} | Source: {{ batch.source_type }}</p>
+  </header>
+  <article class="card">
+    <p><strong>{{ batch.total_files }}</strong> uploaded</p>
+    <p><strong>{{ batch.processed_files }}</strong> processed</p>
+    {% set waiting = batch.total_files - batch.processed_files - batch.failed_files %}
+    {% if waiting > 0 %}<p><strong>{{ waiting }}</strong> waiting</p>{% endif %}
+    {% if batch.failed_files %}<p class="error"><strong>{{ batch.failed_files }}</strong> failed</p>{% endif %}
+  </article>
+  {% if batch.uploads %}
+  <h2>Files</h2>
+  <div class="stack">
+    {% for upload in batch.uploads %}
+    <article class="card card-compact">
+      <strong>{{ upload.original_filename or upload.filename }}</strong>
+      {% if upload.folder_path %}<p class="hint">{{ upload.folder_path }}</p>{% endif %}
+      <p class="hint">Status: {{ upload.status }}</p>
+    </article>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <nav class="page-nav">
+    <a class="button ghost" href="{{ url_for('main.library_home') }}">Back to Library</a>
+  </nav>
+</section>
+{% endblock %}

@@ -39,6 +39,28 @@ def upload_material(client, filename="bio.txt", payload=b"Grade 10 biology photo
     return client.post("/library/upload", data=data, content_type="multipart/form-data", follow_redirects=True)
 
 
+def upload_multiple_material(client, files, **fields):
+    data = {
+        "files": [(BytesIO(payload), filename) for filename, payload in files],
+        "grade": fields.get("grade", "10"),
+        "subject": fields.get("subject", "Biology"),
+        "title": fields.get("title", "Biology Notes"),
+        "description": fields.get("description", "batch upload"),
+    }
+    return client.post("/library/upload", data=data, content_type="multipart/form-data", follow_redirects=True)
+
+
+def upload_folder_material(client, files, **fields):
+    data = {
+        "folder_files": [(BytesIO(payload), path) for path, payload in files],
+        "grade": fields.get("grade", "10"),
+        "subject": fields.get("subject", "Biology"),
+        "title": fields.get("title", ""),
+        "description": fields.get("description", "folder upload"),
+    }
+    return client.post("/library/upload", data=data, content_type="multipart/form-data", follow_redirects=True)
+
+
 def test_library_upload_requires_login(tmp_path):
     app = make_app(tmp_path)
     response = app.test_client().get("/library/upload")
@@ -280,4 +302,61 @@ def test_published_chapter_uses_original_source_text(tmp_path):
     with app.app_context():
         view = get_library_service().chapter_view(1)
     assert view["sections"][0]["content"] == original
+
+
+def test_multiple_uploads_create_batch_and_reviews(tmp_path):
+    app = make_app(tmp_path)
+    client = app.test_client()
+    login_user(client)
+    response = upload_multiple_material(
+        client,
+        [
+            ("cells.txt", b"Grade 10 biology cells"),
+            ("photosynthesis.txt", b"Grade 10 biology photosynthesis"),
+        ],
+        title="Grade 10 Biology Notes",
+    )
+    assert response.status_code == 200
+    assert b"Grade 10 Biology Notes" in response.data
+    with app.app_context():
+        service = get_library_service()
+        batches = service.list_batches()
+        reviews = service.list_reviews()
+        assert len(batches) == 1
+        assert batches[0].total_files == 2
+        assert batches[0].processed_files == 2
+        assert len(reviews) == 2
+
+
+def test_single_upload_does_not_create_batch(tmp_path):
+    app = make_app(tmp_path)
+    client = app.test_client()
+    login_user(client)
+    upload_material(client)
+    with app.app_context():
+        service = get_library_service()
+        assert len(service.list_batches()) == 0
+        assert len(service.list_reviews()) == 1
+
+
+def test_folder_upload_preserves_paths_and_batch(tmp_path):
+    app = make_app(tmp_path)
+    client = app.test_client()
+    login_user(client)
+    response = upload_folder_material(
+        client,
+        [
+            ("Biology Notes/Cells.pdf", b"%PDF-1.4 cells"),
+            ("Biology Notes/Photosynthesis.docx", b"PK photosynthesis"),
+        ],
+    )
+    assert response.status_code == 200
+    with app.app_context():
+        service = get_library_service()
+        batches = service.list_batches()
+        assert len(batches) == 1
+        assert batches[0].source_type == "folder"
+        batch = service.get_batch(batches[0].id)
+        paths = {item["folder_path"] for item in batch.uploads}
+        assert "Biology Notes" in paths
 

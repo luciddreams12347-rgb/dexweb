@@ -9,6 +9,7 @@ DeX Web can run without a database for local demos, but production accounts, aud
 - Schema file: `database/schema.sql`
 - DEX Library extension schema: `database/library_v1.sql`
 - DEX Library production migration: `database/library_v1_1.sql`
+- DEX Library upload batch migration: `database/library_v1_2.sql`
 
 ## Create The Database
 
@@ -20,7 +21,8 @@ DeX Web can run without a database for local demos, but production accounts, aud
 4. Paste and run the contents of `database/schema.sql`.
 5. Run `database/library_v1.sql` for the DEX Library tables.
 6. Run `database/library_v1_1.sql` for production upload metadata and indexes.
-7. Add these environment variables in your WSGI file or web app environment:
+7. Run `database/library_v1_2.sql` for upload batch tracking.
+8. Add these environment variables in your WSGI file or web app environment:
 
 ```bash
 DEX_DB_ENABLED=true
@@ -39,7 +41,7 @@ Render does not provide managed MySQL. Use an external MySQL provider such as Pl
 DATABASE_URL=mysql+pymysql://user:password@host:3306/database_name
 ```
 
-Run `database/schema.sql`, `database/library_v1.sql`, and `database/library_v1_1.sql` in your provider's SQL console before turning on public traffic.
+Run `database/schema.sql`, `database/library_v1.sql`, `database/library_v1_1.sql`, and `database/library_v1_2.sql` in your provider's SQL console before turning on public traffic.
 
 ### Replit
 
@@ -52,6 +54,7 @@ mysql -u root -p -e "CREATE DATABASE dexweb CHARACTER SET utf8mb4 COLLATE utf8mb
 mysql -u root -p dexweb < database/schema.sql
 mysql -u root -p dexweb < database/library_v1.sql
 mysql -u root -p dexweb < database/library_v1_1.sql
+mysql -u root -p dexweb < database/library_v1_2.sql
 ```
 
 Then create a local `.env` file from `.env.example` and fill in either `DATABASE_URL` or the `DEX_DB_*` values.

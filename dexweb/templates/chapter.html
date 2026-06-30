@@ -1,24 +1,30 @@
 {% extends "base.html" %}
 {% block title %}{{ view.chapter.title }} - Library{% endblock %}
 {% block content %}
-<section class="panel">
-  <h1>Grade {{ view.chapter.grade or "?" }} - {{ view.chapter.subject }}</h1>
-  <h2>{{ view.chapter.title }}</h2>
-  {% if notice %}<p class="hint">{{ notice }}</p>{% endif %}
-  {% for section in view.sections %}
-  <article class="result" style="margin-bottom: 12px;">
-    <h3>{{ section.title }}</h3>
-    <div>{{ section.content }}</div>
-  </article>
-  {% endfor %}
+<section class="panel page-panel">
+  <header class="page-header">
+    <h1>Grade {{ view.chapter.grade or "?" }} - {{ view.chapter.subject }}</h1>
+    <h2>{{ view.chapter.title }}</h2>
+    {% if notice %}<p class="hint">{{ notice }}</p>{% endif %}
+  </header>
+  <div class="stack">
+    {% for section in view.sections %}
+    <article class="card">
+      <h3>{{ section.title }}</h3>
+      <div class="result">{{ section.content }}</div>
+    </article>
+    {% endfor %}
+  </div>
   {% if view.related %}
     <h2>Related Chapters</h2>
-    <ul>
+    <div class="stack">
       {% for chapter in view.related %}
-      <li><a href="{{ url_for('main.library_chapter', chapter_id=chapter.id) }}">{{ chapter.title }}</a></li>
+      <a class="button ghost" href="{{ url_for('main.library_chapter', chapter_id=chapter.id) }}">{{ chapter.title }}</a>
       {% endfor %}
-    </ul>
+    </div>
   {% endif %}
-  <a class="button ghost" href="{{ url_for('main.library_home') }}">Back</a>
+  <nav class="page-nav">
+    <a class="button ghost" href="{{ url_for('main.library_home') }}">Back to Library</a>
+  </nav>
 </section>
 {% endblock %}

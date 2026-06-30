@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}DEX - {{ site.brand }}{% endblock %}
 {% block content %}
-<section class="chat-panel dex-panel">
-  <header class="dex-header">
+<section class="chat-panel dex-panel page-panel">
+  <header class="dex-header page-header">
     <h1>DEX</h1>
     <p class="hint">Central intelligence for {{ user }}</p>
   </header>
@@ -29,9 +29,11 @@
     <div class="button-row">
       <button type="submit" name="action" value="send">Send</button>
       <button type="submit" name="action" value="clear" class="button ghost">Clear</button>
-      <a class="button ghost" href="{{ url_for('main.home') }}">Back</a>
     </div>
   </form>
+  <nav class="page-nav">
+    <a class="button ghost" href="{{ url_for('main.home') }}">Back to Home</a>
+  </nav>
 </section>
 <script src="{{ url_for('static', filename='js/dex.js') }}" defer></script>
 {% endblock %}

@@ -1,13 +1,18 @@
 {% extends "base.html" %}
 {% block title %}Home - {{ site.brand }}{% endblock %}
 {% block content %}
-<section class="panel center">
-  <h1>Welcome, {{ user }}! Choose a tool</h1>
-  <nav class="button-row">
+<section class="panel page-panel center">
+  <header class="page-header">
+    <h1>Welcome, {{ user }}</h1>
+    <p class="hint">Choose a tool to continue.</p>
+  </header>
+  <nav class="button-row page-actions">
     {% for item in site.navigation %}
       <a class="button {{ item.variant|default('') }}" href="{{ url_for(item.endpoint) }}">{{ item.label }}</a>
     {% endfor %}
   </nav>
-  <a class="button ghost" href="{{ url_for('main.logout') }}">Logout</a>
+  <nav class="page-nav">
+    <a class="button ghost" href="{{ url_for('main.logout') }}">Logout</a>
+  </nav>
 </section>
 {% endblock %}
